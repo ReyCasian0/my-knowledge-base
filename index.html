@@ -1,0 +1,255 @@
+
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>My Knowledge Base</title>
+<style>
+* { box-sizing: border-box; }
+body {
+  margin: 0; padding: 20px;
+  background: #0b1220; color: #edf4ff;
+  font-family: -apple-system, BlinkMacSystemFont, sans-serif;
+}
+main { max-width: 900px; margin: auto; }
+h1 { margin-bottom: 6px; }
+.muted { color: #a8b8ce; }
+.panel {
+  background: #152238; border: 1px solid #2b405e;
+  border-radius: 14px; padding: 18px; margin-top: 16px;
+}
+input, textarea, button {
+  width: 100%; padding: 12px; margin-top: 8px;
+  border-radius: 9px; font: inherit;
+}
+input, textarea {
+  color: white; background: #0b1220;
+  border: 1px solid #425675;
+}
+button {
+  background: #2878ee; color: white;
+  border: 0; font-weight: 600; cursor: pointer;
+}
+button.secondary { background: #30425b; }
+button.delete { background: #873b4b; width: auto; }
+.file {
+  padding: 12px 0; border-bottom: 1px solid #30425b;
+  overflow-wrap: anywhere;
+}
+.tag { color: #8fc1ff; font-size: 13px; }
+.empty { color: #a8b8ce; padding: 12px 0; }
+.actions { display: flex; gap: 8px; flex-wrap: wrap; }
+.actions button { flex: 1; min-width: 130px; }
+.status { color: #8ee6b0; font-size: 13px; }
+</style>
+</head>
+<body>
+<main>
+  <h1>My Knowledge Base</h1>
+  <div class="muted">Your personal document library</div>
+  <p id="status" class="status">Checking local storage...</p>
+
+  <section class="panel">
+    <h2>Search your library</h2>
+    <input id="search" placeholder="Search titles, notes, or tags...">
+  </section>
+
+  <section class="panel">
+    <h2>Add a document record</h2>
+    <input id="title" placeholder="Document name">
+    <input id="tags" placeholder="Tags (e.g. school, cybersecurity)">
+    <textarea id="notes" rows="3" placeholder="What is this document about?"></textarea>
+    <button id="add">Add to my library</button>
+  </section>
+
+  <section class="panel">
+    <h2>My documents</h2>
+    <div id="count" class="muted">0 documents</div>
+    <div id="list"></div>
+  </section>
+
+  <section class="panel">
+    <h2>Backup and restore</h2>
+    <p class="muted">Export your catalog to a JSON backup file. Keep backups somewhere safe.</p>
+    <div class="actions">
+      <button id="export">Export backup</button>
+      <button id="importButton" class="secondary">Restore backup</button>
+    </div>
+    <input id="importFile" type="file" accept=".json,application/json" hidden>
+    <p class="muted">This backs up document records and notes, not the original documents.</p>
+  </section>
+</main>
+
+<script>
+const KEY = "myKnowledgeBaseRecordsV1";
+let records = [];
+let storageWorks = false;
+
+const $ = id => document.getElementById(id);
+const status = $("status");
+
+try {
+  const testKey = KEY + "_test";
+  localStorage.setItem(testKey, "ok");
+  localStorage.removeItem(testKey);
+
+  const saved = localStorage.getItem(KEY);
+  records = saved ? JSON.parse(saved) : [];
+
+  if (!Array.isArray(records)) throw new Error("Invalid data");
+  storageWorks = true;
+  status.textContent = "Local storage is available.";
+} catch (error) {
+  status.textContent =
+    "Warning: browser storage is unavailable here. Back up records before leaving.";
+}
+
+function save() {
+  if (!storageWorks) {
+    status.textContent =
+      "Not saved: local storage is unavailable. Export a backup if possible.";
+    return false;
+  }
+  try {
+    localStorage.setItem(KEY, JSON.stringify(records));
+    status.textContent = "Saved on this browser.";
+    return true;
+  } catch (error) {
+    status.textContent =
+      "Save failed. Storage may be full or blocked. Export a backup.";
+    return false;
+  }
+}
+
+function render() {
+  const query = $("search").value.toLowerCase().trim();
+  const matches = records.filter(item =>
+    (item.title + " " + item.tags + " " + item.notes)
+      .toLowerCase().includes(query)
+  );
+
+  $("count").textContent =
+    records.length + (records.length === 1 ? " document" : " documents");
+
+  const list = $("list");
+  list.replaceChildren();
+
+  if (!matches.length) {
+    const empty = document.createElement("div");
+    empty.className = "empty";
+    empty.textContent = records.length
+      ? "No matching documents."
+      : "Your library is empty. Add your first record above.";
+    list.appendChild(empty);
+    return;
+  }
+
+  matches.forEach(item => {
+    const card = document.createElement("div");
+    card.className = "file";
+
+    const heading = document.createElement("strong");
+    heading.textContent = item.title;
+    card.appendChild(heading);
+
+    const tag = document.createElement("div");
+    tag.className = "tag";
+    tag.textContent = item.tags || "No tags";
+    card.appendChild(tag);
+
+    const notes = document.createElement("p");
+    notes.textContent = item.notes || "No notes added.";
+    card.appendChild(notes);
+
+    const del = document.createElement("button");
+    del.className = "delete";
+    del.textContent = "Delete record";
+    del.addEventListener("click", () => {
+      if (!confirm("Delete this record?")) return;
+      records = records.filter(record => record.id !== item.id);
+      if (save()) render();
+    });
+    card.appendChild(del);
+    list.appendChild(card);
+  });
+}
+
+$("add").addEventListener("click", () => {
+  const title = $("title").value.trim();
+  if (!title) {
+    alert("Please enter a document name first.");
+    return;
+  }
+
+  records.push({
+    id: Date.now().toString() + "-" + Math.random().toString(36).slice(2),
+    title,
+    tags: $("tags").value.trim(),
+    notes: $("notes").value.trim(),
+    created: new Date().toISOString()
+  });
+
+  if (!save()) {
+    records.pop();
+    return;
+  }
+
+  $("title").value = "";
+  $("tags").value = "";
+  $("notes").value = "";
+  render();
+});
+
+$("search").addEventListener("input", render);
+
+$("export").addEventListener("click", () => {
+  const blob = new Blob(
+    [JSON.stringify({ version: 1, records }, null, 2)],
+    { type: "application/json" }
+  );
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = "my-knowledge-base-backup.json";
+  link.click();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+});
+
+$("importButton").addEventListener("click", () => $("importFile").click());
+
+$("importFile").addEventListener("change", async event => {
+  const file = event.target.files[0];
+  if (!file) return;
+
+  try {
+    const data = JSON.parse(await file.text());
+    if (!data || data.version !== 1 || !Array.isArray(data.records)) {
+      throw new Error("This is not a supported backup.");
+    }
+
+    const valid = data.records.every(item =>
+      item && typeof item.id === "string" &&
+      typeof item.title === "string" &&
+      typeof item.tags === "string" &&
+      typeof item.notes === "string"
+    );
+    if (!valid) throw new Error("The backup contains invalid records.");
+
+    if (!confirm("Replace your current library with the backup? Export your current records first if you want to keep them.")) return;
+
+    const previous = records;
+    records = data.records;
+    if (!save()) records = previous;
+    render();
+  } catch (error) {
+    alert("Could not restore backup: " + error.message);
+  } finally {
+    event.target.value = "";
+  }
+});
+
+render();
+</script>
+</body>
+</html>
