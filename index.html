@@ -152,10 +152,27 @@ function save() {
 
 function render() {
   const query = $("search").value.toLowerCase().trim();
-  const matches = records.filter(item =>
-    [item.title, item.tags, item.notes, item.content]
-      .join(" ").toLowerCase().includes(query)
-  );
+  
+const selectedCategory = $("categoryFilter").value;
+
+const matches = records.filter(item => {
+  const itemCategory = item.category || "Uncategorized";
+
+  const categoryMatches =
+    selectedCategory === "All" ||
+    itemCategory === selectedCategory;
+
+  const searchMatches = [
+    item.title,
+    item.tags,
+    item.notes,
+    item.content,
+    itemCategory
+  ].join(" ").toLowerCase().includes(query);
+
+  return categoryMatches && searchMatches;
+});
+
 
   $("count").textContent =
     records.length + (records.length === 1 ? " document" : " documents");
