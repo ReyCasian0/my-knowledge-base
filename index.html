@@ -13,7 +13,6 @@ body {
   font-family: -apple-system, BlinkMacSystemFont, sans-serif;
 }
 main { max-width: 900px; margin: auto; }
-h1 { margin-bottom: 6px; }
 .muted { color: #a8b8ce; }
 .panel {
   background: #152238; border: 1px solid #2b405e;
@@ -31,93 +30,99 @@ button {
   background: #2878ee; color: white;
   border: 0; font-weight: 600; cursor: pointer;
 }
-button.secondary { background: #30425b; }
-button.delete { background: #873b4b; width: auto; }
+.secondary { background: #30425b; }
+.danger { background: #873b4b; }
 .file {
-  padding: 12px 0; border-bottom: 1px solid #30425b;
+  padding: 14px 0; border-bottom: 1px solid #30425b;
   overflow-wrap: anywhere;
 }
 .tag { color: #8fc1ff; font-size: 13px; }
-.empty { color: #a8b8ce; padding: 12px 0; }
+.status { color: #8ee6b0; }
 .actions { display: flex; gap: 8px; flex-wrap: wrap; }
 .actions button { flex: 1; min-width: 130px; }
-.status { color: #8ee6b0; font-size: 13px; }
+pre {
+  white-space: pre-wrap; overflow-wrap: anywhere;
+  color: #c6d7ee; font: inherit; font-size: 14px;
+}
 </style>
 </head>
 <body>
 <main>
   <h1>My Knowledge Base</h1>
-  <div class="muted">Your personal document library</div>
-  <p id="status" class="status">Checking local storage...</p>
+  <p class="muted">Your personal, local-first document library</p>
+  <p id="status" class="status">Starting database...</p>
 
   <section class="panel">
-    <h2>Search your library</h2>
-    <input id="search" placeholder="Search titles, notes, or tags...">
+    <h2>Search everything</h2>
+    <input id="search" placeholder="Search names, tags, notes, or text...">
   </section>
 
   <section class="panel">
     <h2>Add a document record</h2>
     <input id="title" placeholder="Document name">
-    <input id="tags" placeholder="Tags (e.g. school, cybersecurity)">
-    <textarea id="notes" rows="3" placeholder="What is this document about?"></textarea>
-    <button id="add">Add to my library</button>
+    <input id="tags" placeholder="Tags, separated by commas">
+    <textarea id="notes" rows="3" placeholder="Description or notes"></textarea>
+    <button id="add">Add record</button>
+  </section>
+
+  <section class="panel">
+    <h2>Import text documents</h2>
+    <p class="muted">
+      Select TXT, Markdown, CSV, or JSON files from Files on your iPad.
+      Their text will be saved in your local library and included in backups.
+    </p>
+    <input id="files" type="file" multiple
+      accept=".txt,.md,.csv,.json,text/plain,text/markdown,text/csv,application/json">
+    <p class="muted">For this first version, each file must be under 2 MB.</p>
   </section>
 
   <section class="panel">
     <h2>My documents</h2>
-    <div id="count" class="muted">0 documents</div>
+    <p id="count" class="muted">0 documents</p>
     <div id="list"></div>
   </section>
 
   <section class="panel">
     <h2>Backup and restore</h2>
-    <p class="muted">Export your catalog to a JSON backup file. Keep backups somewhere safe.</p>
+    <p class="muted">
+      Export a separate JSON backup before making major changes.
+      Keep it in Files, preferably in more than one safe location.
+    </p>
     <div class="actions">
       <button id="export">Export backup</button>
-      <button id="importButton" class="secondary">Restore backup</button>
+      <button id="restoreButton" class="secondary">Restore backup</button>
     </div>
-    <input id="importFile" type="file" accept=".json,application/json" hidden>
-    <p class="muted">This backs up document records and notes, not the original documents.</p>
+    <input id="backupFile" type="file" accept=".json,application/json" hidden>
+    <p class="muted">
+      Restoring replaces the current catalog. Export your current catalog first.
+    </p>
   </section>
 </main>
 
 <script>
 const KEY = "myKnowledgeBaseRecordsV1";
 let records = [];
-let storageWorks = false;
+let ready = false;
 
 const $ = id => document.getElementById(id);
 const status = $("status");
 
-try {
-  const testKey = KEY + "_test";
-  localStorage.setItem(testKey, "ok");
-  localStorage.removeItem(testKey);
-
-  const saved = localStorage.getItem(KEY);
-  records = saved ? JSON.parse(saved) : [];
-
-  if (!Array.isArray(records)) throw new Error("Invalid data");
-  storageWorks = true;
-  status.textContent = "Local storage is available.";
-} catch (error) {
-  status.textContent =
-    "Warning: browser storage is unavailable here. Back up records before leaving.";
+function setStatus(message, good = true) {
+  status.textContent = message;
+  status.style.color = good ? "#8ee6b0" : "#ffadad";
 }
 
 function save() {
-  if (!storageWorks) {
-    status.textContent =
-      "Not saved: local storage is unavailable. Export a backup if possible.";
-    return false;
-  }
+  if (!ready) return false;
   try {
     localStorage.setItem(KEY, JSON.stringify(records));
-    status.textContent = "Saved on this browser.";
+    setStatus("Saved on this browser.");
     return true;
   } catch (error) {
-    status.textContent =
-      "Save failed. Storage may be full or blocked. Export a backup.";
+    setStatus(
+      "Save failed. Storage may be full. Export a backup immediately.",
+      false
+    );
     return false;
   }
 }
@@ -125,8 +130,8 @@ function save() {
 function render() {
   const query = $("search").value.toLowerCase().trim();
   const matches = records.filter(item =>
-    (item.title + " " + item.tags + " " + item.notes)
-      .toLowerCase().includes(query)
+    [item.title, item.tags, item.notes, item.content]
+      .join(" ").toLowerCase().includes(query)
   );
 
   $("count").textContent =
@@ -136,57 +141,102 @@ function render() {
   list.replaceChildren();
 
   if (!matches.length) {
-    const empty = document.createElement("div");
-    empty.className = "empty";
+    const empty = document.createElement("p");
+    empty.className = "muted";
     empty.textContent = records.length
       ? "No matching documents."
-      : "Your library is empty. Add your first record above.";
+      : "Your library is empty.";
     list.appendChild(empty);
     return;
   }
 
   matches.forEach(item => {
-    const card = document.createElement("div");
+    const card = document.createElement("article");
     card.className = "file";
 
     const heading = document.createElement("strong");
     heading.textContent = item.title;
     card.appendChild(heading);
 
-    const tag = document.createElement("div");
-    tag.className = "tag";
-    tag.textContent = item.tags || "No tags";
-    card.appendChild(tag);
+    const tags = document.createElement("p");
+    tags.className = "tag";
+    tags.textContent = item.tags || "No tags";
+    card.appendChild(tags);
 
     const notes = document.createElement("p");
-    notes.textContent = item.notes || "No notes added.";
+    notes.textContent = item.notes || "";
     card.appendChild(notes);
 
+    if (item.content) {
+      const preview = document.createElement("details");
+      const summary = document.createElement("summary");
+      summary.textContent = "View imported text";
+      const text = document.createElement("pre");
+      text.textContent = item.content.slice(0, 12000);
+      preview.append(summary, text);
+      card.appendChild(preview);
+    }
+
     const del = document.createElement("button");
-    del.className = "delete";
+    del.className = "danger";
     del.textContent = "Delete record";
     del.addEventListener("click", () => {
-      if (!confirm("Delete this record?")) return;
-      records = records.filter(record => record.id !== item.id);
-      if (save()) render();
+      if (!confirm("Delete this record? Export a backup first if needed.")) {
+        return;
+      }
+      const old = records;
+      records = records.filter(r => r.id !== item.id);
+      if (!save()) records = old;
+      render();
     });
     card.appendChild(del);
     list.appendChild(card);
   });
 }
 
+function makeId() {
+  return Date.now().toString() + "-" +
+    Math.random().toString(36).slice(2);
+}
+
+function normaliseRecord(item) {
+  if (!item || typeof item.title !== "string") {
+    throw new Error("A record has no valid title.");
+  }
+  return {
+    id: typeof item.id === "string" ? item.id : makeId(),
+    title: item.title,
+    tags: typeof item.tags === "string" ? item.tags : "",
+    notes: typeof item.notes === "string" ? item.notes : "",
+    content: typeof item.content === "string" ? item.content : "",
+    created: typeof item.created === "string"
+      ? item.created : new Date().toISOString()
+  };
+}
+
+try {
+  const existing = localStorage.getItem(KEY);
+  records = existing ? JSON.parse(existing).map(normaliseRecord) : [];
+  if (!Array.isArray(records)) throw new Error("Invalid saved records.");
+  ready = true;
+  setStatus("Local database ready.");
+} catch (error) {
+  setStatus("Could not read saved data. Export or recover a backup.", false);
+}
+
 $("add").addEventListener("click", () => {
   const title = $("title").value.trim();
   if (!title) {
-    alert("Please enter a document name first.");
+    alert("Enter a document name first.");
     return;
   }
 
   records.push({
-    id: Date.now().toString() + "-" + Math.random().toString(36).slice(2),
+    id: makeId(),
     title,
     tags: $("tags").value.trim(),
     notes: $("notes").value.trim(),
+    content: "",
     created: new Date().toISOString()
   });
 
@@ -203,46 +253,113 @@ $("add").addEventListener("click", () => {
 
 $("search").addEventListener("input", render);
 
-$("export").addEventListener("click", () => {
-  const blob = new Blob(
-    [JSON.stringify({ version: 1, records }, null, 2)],
-    { type: "application/json" }
-  );
-  const url = URL.createObjectURL(blob);
-  const link = document.createElement("a");
-  link.href = url;
-  link.download = "my-knowledge-base-backup.json";
-  link.click();
-  setTimeout(() => URL.revokeObjectURL(url), 1000);
+$("files").addEventListener("change", async event => {
+  const files = Array.from(event.target.files || []);
+  if (!files.length) return;
+
+  const additions = [];
+
+  try {
+    for (const file of files) {
+      if (file.size > 2 * 1024 * 1024) {
+        throw new Error(file.name + " is larger than 2 MB.");
+      }
+
+      const ext = file.name.split(".").pop().toLowerCase();
+      if (!["txt", "md", "csv", "json"].includes(ext)) {
+        throw new Error(
+          file.name + " is not supported yet. Try TXT, MD, CSV, or JSON."
+        );
+      }
+
+      const content = await file.text();
+      additions.push({
+        id: makeId(),
+        title: file.name,
+        tags: "imported, " + ext,
+        notes: "Imported text document",
+        content,
+        created: new Date().toISOString()
+      });
+    }
+
+    const previous = records;
+    records = records.concat(additions);
+
+    if (!save()) {
+      records = previous;
+      return;
+    }
+
+    render();
+    setStatus("Imported " + additions.length + " file(s) successfully.");
+  } catch (error) {
+    setStatus(error.message, false);
+    alert(error.message);
+  } finally {
+    event.target.value = "";
+  }
 });
 
-$("importButton").addEventListener("click", () => $("importFile").click());
+$("export").addEventListener("click", () => {
+  if (!ready) {
+    alert("Database is not ready. No backup was created.");
+    return;
+  }
 
-$("importFile").addEventListener("change", async event => {
+  try {
+    const backup = {
+      app: "My Knowledge Base",
+      version: 1,
+      exportedAt: new Date().toISOString(),
+      records
+    };
+    const blob = new Blob(
+      [JSON.stringify(backup, null, 2)],
+      { type: "application/json" }
+    );
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = "my-knowledge-base-backup.json";
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 3000);
+    setStatus("Backup prepared. Save the downloaded file in Files.");
+  } catch (error) {
+    setStatus("Backup failed: " + error.message, false);
+  }
+});
+
+$("restoreButton").addEventListener("click", () => $("backupFile").click());
+
+$("backupFile").addEventListener("change", async event => {
   const file = event.target.files[0];
   if (!file) return;
 
   try {
     const data = JSON.parse(await file.text());
     if (!data || data.version !== 1 || !Array.isArray(data.records)) {
-      throw new Error("This is not a supported backup.");
+      throw new Error("This is not a supported backup file.");
     }
 
-    const valid = data.records.every(item =>
-      item && typeof item.id === "string" &&
-      typeof item.title === "string" &&
-      typeof item.tags === "string" &&
-      typeof item.notes === "string"
-    );
-    if (!valid) throw new Error("The backup contains invalid records.");
-
-    if (!confirm("Replace your current library with the backup? Export your current records first if you want to keep them.")) return;
+    const restored = data.records.map(normaliseRecord);
+    if (!confirm(
+      "Replace the current library with " + restored.length +
+      " backup records? Export the current library first if needed."
+    )) return;
 
     const previous = records;
-    records = data.records;
-    if (!save()) records = previous;
+    records = restored;
+    if (!save()) {
+      records = previous;
+      return;
+    }
     render();
+    setStatus("Backup restored successfully.");
   } catch (error) {
+    setStatus("Restore failed: " + error.message, false);
     alert("Could not restore backup: " + error.message);
   } finally {
     event.target.value = "";
