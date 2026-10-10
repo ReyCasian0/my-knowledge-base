@@ -310,7 +310,7 @@ if (ext === "pdf") {
 additions.push({
   id: makeId(),
   title: file.name,
-  category: "Uncategorized",
+  category: $("importCategory").value,
   tags: "imported, " + ext,
   notes: ext === "pdf" ? "Imported PDF document" : "Imported text document",
   content,
