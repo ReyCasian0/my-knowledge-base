@@ -292,6 +292,7 @@ $("add").addEventListener("click", () => {
 });
 
 $("search").addEventListener("input", render);
+$("categoryFilter").addEventListener("change", render);
 
 $("files").addEventListener("change", async event => {
   const files = Array.from(event.target.files || []);
