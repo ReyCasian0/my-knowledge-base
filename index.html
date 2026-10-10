@@ -295,9 +295,11 @@ if (ext === "pdf") {
   content = await file.text();
 }
 
+
 additions.push({
   id: makeId(),
   title: file.name,
+  category: "Uncategorized",
   tags: "imported, " + ext,
   notes: ext === "pdf" ? "Imported PDF document" : "Imported text document",
   content,
