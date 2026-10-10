@@ -265,22 +265,44 @@ $("files").addEventListener("change", async event => {
         throw new Error(file.name + " is larger than 2 MB.");
       }
 
-      const ext = file.name.split(".").pop().toLowerCase();
-      if (!["txt", "md", "csv", "json"].includes(ext)) {
-        throw new Error(
-          file.name + " is not supported yet. Try TXT, MD, CSV, or JSON."
-        );
-      }
+      
+const ext = file.name.split(".").pop().toLowerCase();
 
-      const content = await file.text();
-      additions.push({
-        id: makeId(),
-        title: file.name,
-        tags: "imported, " + ext,
-        notes: "Imported text document",
-        content,
-        created: new Date().toISOString()
-      });
+if (!["txt", "md", "csv", "json", "pdf"].includes(ext)) {
+  throw new Error(
+    file.name + " is not supported yet. Try TXT, MD, CSV, JSON, or PDF."
+  );
+}
+
+let content;
+
+if (ext === "pdf") {
+  const pdfData = new Uint8Array(await file.arrayBuffer());
+  const pdf = await pdfjsLib.getDocument({ data: pdfData }).promise;
+  const pages = [];
+
+  for (let pageNum = 1; pageNum <= pdf.numPages; pageNum++) {
+    const page = await pdf.getPage(pageNum);
+    const textContent = await page.getTextContent();
+    const pageText = textContent.items
+      .map(item => item.str || "")
+      .join(" ");
+    pages.push(pageText);
+  }
+
+  content = pages.join("\n\n");
+} else {
+  content = await file.text();
+}
+
+additions.push({
+  id: makeId(),
+  title: file.name,
+  tags: "imported, " + ext,
+  notes: ext === "pdf" ? "Imported PDF document" : "Imported text document",
+  content,
+  created: new Date().toISOString()
+});
     }
 
     const previous = records;
