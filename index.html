@@ -322,6 +322,11 @@ function normaliseRecord(item) {
   return {
     id: typeof item.id === "string" ? item.id : makeId(),
     title: item.title,
+    category: typeof item.category === "string"
+
+      ? item.category
+
+      : "Uncategorized",
     tags: typeof item.tags === "string" ? item.tags : "",
     notes: typeof item.notes === "string" ? item.notes : "",
     content: typeof item.content === "string" ? item.content : "",
