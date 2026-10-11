@@ -68,6 +68,13 @@ pre {
     </div>
   </div>
 </section>
+  
+<section class="panel">
+  <h2>Recent Documents</h2>
+  <p class="muted">Your 5 most recently saved records.</p>
+  <div id="recentDocuments" class="dashboard-grid"></div>
+</section>
+
 
   <section class="panel">
     <h2>Search everything</h2>
@@ -175,12 +182,57 @@ const categoryNames = new Set(
 );
 
 $("dashboardCategories").textContent = categoryNames.size;
+  
+const recentDocuments = [...records]
+  .sort((a, b) => {
+    return new Date(b.created || 0) - new Date(a.created || 0);
+  })
+  .slice(0, 5);
+
+const recentList = $("recentDocuments");
+recentList.replaceChildren();
+
+if (recentDocuments.length === 0) {
+  const message = document.createElement("p");
+  message.className = "muted";
+  message.textContent = "No documents saved yet.";
+  recentList.appendChild(message);
+} else {
+  recentDocuments.forEach(item => {
+    const card = document.createElement("div");
+    card.className = "dashboard-card";
+
+    const title = document.createElement("h3");
+    title.textContent = item.title || "Untitled document";
+    card.appendChild(title);
+
+    const details = document.createElement("p");
+    details.className = "muted";
+    details.textContent =
+      (item.category || "Uncategorized") +
+      " · " +
+      (item.created
+        ? new Date(item.created).toLocaleString()
+        : "Date unknown");
+    card.appendChild(details);
+
+    if (item.notes) {
+      const notes = document.createElement("p");
+      notes.textContent = item.notes;
+      card.appendChild(notes);
+    }
+
+    recentList.appendChild(card);
+  });
+}
+
   const query = $("search").value.toLowerCase().trim();
   
 const selectedCategory = $("categoryFilter").value;
 
 const matches = records.filter(item => {
   const itemCategory = item.category || "Uncategorized";
+  
 
   const categoryMatches =
     selectedCategory === "All" ||
