@@ -168,6 +168,13 @@ function save() {
 }
 
 function render() {
+  $("dashboardDocuments").textContent = records.length;
+
+const categoryNames = new Set(
+  records.map(item => item.category || "Uncategorized")
+);
+
+$("dashboardCategories").textContent = categoryNames.size;
   const query = $("search").value.toLowerCase().trim();
   
 const selectedCategory = $("categoryFilter").value;
