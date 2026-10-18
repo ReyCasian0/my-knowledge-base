@@ -146,8 +146,18 @@ pre {
   </section>
 </main>
 
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 <script>
 const KEY = "myKnowledgeBaseRecordsV1";
+  
+const SUPABASE_URL = "https://oiwelufjgsqhpkagtwyo.supabase.co/rest/v1/";
+const SUPABASE_PUBLISHABLE_KEY = "sb_publishable_WX5eHQisyBT_Ox37JAO2hw_pxrmnIQ_";
+
+const supabaseClient = window.supabase.createClient(
+  SUPABASE_URL,
+  SUPABASE_PUBLISHABLE_KEY
+);
+
 let records = [];
 let ready = false;
 
@@ -520,6 +530,5 @@ render();
   pdfjsLib.GlobalWorkerOptions.workerSrc =
     "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js";
 </script>
-<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 </body>
 </html>
