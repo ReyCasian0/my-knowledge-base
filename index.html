@@ -65,6 +65,7 @@ pre {
 </section>
 <main id="appScreen" hidden>
   <h1>My Knowledge Base</h1>
+<button type="button" id="signOutButton" onclick="signOut()">Sign Out</button>
   <p class="muted">Your personal, local-first document library</p>
   <p id="status" class="status">Starting database...</p>
   <section class="panel">
@@ -576,6 +577,19 @@ async function signIn(event) {
   } catch (error) {
     message.textContent = "Unable to sign in. Please try again.";
   }
+}
+
+async function signOut() {
+  const { error } = await supabaseClient.auth.signOut();
+
+  if (error) {
+    alert("Unable to sign out: " + error.message);
+    return;
+  }
+
+  document.getElementById("loginPassword").value = "";
+  document.getElementById("loginMessage").textContent = "";
+  showLoginScreen();
 }
 
 async function checkLoginSession() {
