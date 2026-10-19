@@ -63,7 +63,7 @@ pre {
 
   <p id="loginMessage" role="status"></p>
 </section>
-<main>
+<main id="appScreen">
   <h1>My Knowledge Base</h1>
   <p class="muted">Your personal, local-first document library</p>
   <p id="status" class="status">Starting database...</p>
@@ -166,7 +166,7 @@ pre {
 <script>
 const KEY = "myKnowledgeBaseRecordsV1";
   
-const SUPABASE_URL = "https://oiwelufjgsqhpkagtwyo.supabase.co/rest/v1/";
+const SUPABASE_URL = "https://oiwelufjgsqhpkagtwyo.supabase.co";
 const SUPABASE_PUBLISHABLE_KEY = "sb_publishable_WX5eHQisyBT_Ox37JAO2hw_pxrmnIQ_";
 
 const supabaseClient = window.supabase.createClient(
@@ -176,6 +176,9 @@ const supabaseClient = window.supabase.createClient(
 
 let records = [];
 let ready = false;
+
+const loginScreen = document.getElementById("loginScreen");
+const appScreen = document.getElementById("appScreen");
 
 const $ = id => document.getElementById(id);
 const status = $("status");
