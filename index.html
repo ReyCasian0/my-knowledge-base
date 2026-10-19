@@ -577,6 +577,25 @@ async function signIn(event) {
     message.textContent = "Unable to sign in. Please try again.";
   }
 }
+
+async function checkLoginSession() {
+  showLoginScreen();
+
+  try {
+    const { data, error } = await supabaseClient.auth.getUser();
+
+    if (error || !data.user) {
+      showLoginScreen();
+      return;
+    }
+
+    showAppScreen();
+  } catch (error) {
+    showLoginScreen();
+  }
+}
+
+checkLoginSession();
   
 render();
 </script>
