@@ -541,6 +541,32 @@ $("backupFile").addEventListener("change", async event => {
   }
 });
 
+async function signIn(event) {
+  event.preventDefault();
+
+  const email = document.getElementById("loginEmail").value.trim();
+  const password = document.getElementById("loginPassword").value;
+  const message = document.getElementById("loginMessage");
+
+  message.textContent = "Signing in...";
+
+  try {
+    const { error } = await supabaseClient.auth.signInWithPassword({
+      email: email,
+      password: password
+    });
+
+    if (error) {
+      message.textContent = error.message;
+      return;
+    }
+
+    message.textContent = "Sign in successful!";
+  } catch (error) {
+    message.textContent = "Unable to sign in. Please try again.";
+  }
+}
+  
 render();
 </script>
 
