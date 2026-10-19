@@ -572,6 +572,7 @@ async function signIn(event) {
     }
 
     message.textContent = "Sign in successful!";
+    showAppScreen();
   } catch (error) {
     message.textContent = "Unable to sign in. Please try again.";
   }
