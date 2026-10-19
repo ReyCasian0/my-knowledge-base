@@ -47,7 +47,7 @@ pre {
 </style>
 </head>
 <body>
-<section id="loginScreen" class="panel" hidden>
+<section id="loginScreen" class="panel">
   <h2>Private Knowledge Base Login</h2>
   <p>Sign in to access your documents.</p>
 
@@ -63,7 +63,7 @@ pre {
 
   <p id="loginMessage" role="status"></p>
 </section>
-<main id="appScreen">
+<main id="appScreen" hidden>
   <h1>My Knowledge Base</h1>
   <p class="muted">Your personal, local-first document library</p>
   <p id="status" class="status">Starting database...</p>
@@ -180,6 +180,16 @@ let ready = false;
 const loginScreen = document.getElementById("loginScreen");
 const appScreen = document.getElementById("appScreen");
 
+function showLoginScreen() {
+  loginScreen.hidden = false;
+  appScreen.hidden = true;
+}
+
+function showAppScreen() {
+  loginScreen.hidden = true;
+  appScreen.hidden = false;
+}
+  
 const $ = id => document.getElementById(id);
 const status = $("status");
 
