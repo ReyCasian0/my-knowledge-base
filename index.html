@@ -592,6 +592,24 @@ async function signOut() {
   showLoginScreen();
 }
 
+async function testSupabaseDocumentsRead() {
+  const { data: authData, error: authError } =
+    await supabaseClient.auth.getUser();
+
+  if (authError || !authData.user) return;
+
+  const { error } = await supabaseClient
+    .from("documents")
+    .select("id")
+    .limit(1);
+
+  if (error) {
+    setStatus("Supabase read test failed: " + error.message, false);
+  } else {
+    setStatus("Supabase private documents read test passed.");
+  }
+}
+
 async function checkLoginSession() {
   showLoginScreen();
 
@@ -604,6 +622,7 @@ async function checkLoginSession() {
     }
 
     showAppScreen();
+    await testSupabaseDocumentsRead();
   } catch (error) {
     showLoginScreen();
   }
