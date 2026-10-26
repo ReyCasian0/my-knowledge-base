@@ -609,6 +609,38 @@ async function testSupabaseDocumentsRead() {
     setStatus("Supabase private documents read test passed.");
   }
 }
+async function testSupabaseDocumentsSave() {
+  const button = document.getElementById("testCloudSave");
+  button.disabled = true;
+  setStatus("Testing Supabase cloud saving...");
+
+  try {
+    const { data, error: authError } =
+      await supabaseClient.auth.getUser();
+
+    if (authError || !data.user) {
+      throw new Error("Please sign in first.");
+    }
+
+    const { error } = await supabaseClient
+      .from("documents")
+      .insert({
+        user_id: data.user.id,
+        title: "Cloud Storage Test",
+        content: "Test document created by my knowledge base.",
+        category: "Uncategorized",
+        tags: "test"
+      });
+
+    if (error) throw error;
+
+    setStatus("Cloud save successful! Test document stored in Supabase.");
+  } catch (error) {
+    setStatus("Cloud save failed: " + error.message, false);
+  } finally {
+    button.disabled = false;
+  }
+}
 
 async function checkLoginSession() {
   showLoginScreen();
