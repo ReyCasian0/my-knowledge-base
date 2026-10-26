@@ -69,6 +69,7 @@ pre {
   <p class="muted">Your personal, local-first document library</p>
   <p id="status" class="status">Starting database...</p>
   <button type="button" id="testCloudSave" onclick="testSupabaseDocumentsSave()">Test Cloud Save</button>
+  <button type="button" id="testCloudLoad" onclick="testSupabaseDocumentsLoad()">Test Cloud Load</button>
   <section class="panel">
   <h2>Dashboard Overview</h2>
   <div class="dashboard-grid">
@@ -643,6 +644,40 @@ async function testSupabaseDocumentsSave() {
   }
 }
 
+async function testSupabaseDocumentsLoad() {
+  const button = document.getElementById("testCloudLoad");
+  button.disabled = true;
+  setStatus("Testing Supabase cloud loading...");
+
+  try {
+    const { data: authData, error: authError } =
+      await supabaseClient.auth.getUser();
+
+    if (authError || !authData.user) {
+      throw new Error("Please sign in first.");
+    }
+
+    const { data, error } = await supabaseClient
+      .from("documents")
+      .select("title, content, category, tags")
+      .eq("user_id", authData.user.id)
+      .eq("title", "Cloud Storage Test")
+      .limit(1);
+
+    if (error) throw error;
+
+    if (!data || data.length === 0) {
+      setStatus("Cloud load completed, but no test document was found.");
+      return;
+    }
+
+    setStatus("Cloud load successful! Found: " + data[0].title);
+  } catch (error) {
+    setStatus("Cloud load failed: " + error.message, false);
+  } finally {
+    button.disabled = false;
+  }
+}
 async function checkLoginSession() {
   showLoginScreen();
 
