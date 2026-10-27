@@ -334,7 +334,14 @@ const matches = records.filter(item => {
       preview.append(summary, text);
       card.appendChild(preview);
     }
-
+const cloudButton = document.createElement("button");
+cloudButton.type = "button";
+cloudButton.textContent = "Save to Cloud";
+cloudButton.addEventListener("click", () => {
+  saveRecordToCloud(item, cloudButton);
+});
+card.appendChild(cloudButton);
+    
     const del = document.createElement("button");
     del.className = "danger";
     del.textContent = "Delete record";
@@ -674,6 +681,61 @@ async function testSupabaseDocumentsLoad() {
     setStatus("Cloud load successful! Found: " + data[0].title);
   } catch (error) {
     setStatus("Cloud load failed: " + error.message, false);
+  } finally {
+    button.disabled = false;
+  }
+}
+  async function saveRecordToCloud(record, button) {
+  if (!record || !record.id) {
+    setStatus("Cloud save failed: Missing document ID.", false);
+    return;
+  }
+
+  if (!confirm("Save '" + record.title + "' to Supabase?")) {
+    return;
+  }
+
+  button.disabled = true;
+  setStatus("Saving document to Supabase...");
+
+  try {
+    const { data: authData, error: authError } =
+      await supabaseClient.auth.getUser();
+
+    if (authError || !authData.user) {
+      throw new Error("Please sign in first.");
+    }
+
+    const createdDate = new Date(record.created);
+    if (Number.isNaN(createdDate.getTime())) {
+      throw new Error("Invalid document creation date.");
+    }
+
+    const { error } = await supabaseClient
+      .from("documents")
+      .insert({
+        user_id: authData.user.id,
+        local_id: String(record.id),
+        title: record.title,
+        content: record.content || "",
+        category: record.category || "Uncategorized",
+        tags: record.tags || "",
+        notes: record.notes || "",
+        created_at: createdDate.toISOString()
+      });
+
+    if (error) {
+      if (error.code === "23505") {
+        throw new Error(
+          "This document is already saved to the cloud. No duplicate created."
+        );
+      }
+      throw error;
+    }
+
+    setStatus("Cloud save successful: " + record.title);
+  } catch (error) {
+    setStatus("Cloud save failed: " + error.message, false);
   } finally {
     button.disabled = false;
   }
