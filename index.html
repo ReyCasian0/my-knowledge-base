@@ -70,6 +70,8 @@ pre {
   <p id="status" class="status">Starting database...</p>
   <button type="button" id="testCloudSave" onclick="testSupabaseDocumentsSave()">Test Cloud Save</button>
   <button type="button" id="testCloudLoad" onclick="testSupabaseDocumentsLoad()">Test Cloud Load</button>
+  <button type="button" id="loadFromCloud" onclick="loadDocumentsFromCloud()">Load from Cloud</button>
+  <p class="muted">Add missing cloud documents to this browser. Existing local records and edits are kept unchanged.</p>
   <section class="panel">
   <h2>Dashboard Overview</h2>
   <div class="dashboard-grid">
@@ -334,6 +336,76 @@ const matches = records.filter(item => {
       preview.append(summary, text);
       card.appendChild(preview);
     }
+    const editButton = document.createElement("button");
+    editButton.type = "button";
+    editButton.textContent = "Edit Record";
+    editButton.addEventListener("click", () => {
+      if (card.querySelector("form")) return;
+
+      const form = document.createElement("form");
+      const fields = {};
+      ["title", "category", "tags", "notes"].forEach(name => {
+        const label = document.createElement("label");
+        label.textContent = name.charAt(0).toUpperCase() + name.slice(1);
+        const input = document.createElement(name === "notes" ? "textarea" : "input");
+        if (name === "notes") input.rows = 3;
+        else input.type = "text";
+        input.value = item[name] || (name === "category" ? "Uncategorized" : "");
+        fields[name] = input;
+        label.appendChild(input);
+        form.appendChild(label);
+      });
+
+      const message = document.createElement("p");
+      message.setAttribute("role", "alert");
+      form.appendChild(message);
+
+      const submit = document.createElement("button");
+      submit.type = "submit";
+      submit.textContent = "Save Changes";
+      const cancel = document.createElement("button");
+      cancel.type = "button";
+      cancel.className = "secondary";
+      cancel.textContent = "Cancel";
+      cancel.addEventListener("click", () => {
+        form.remove();
+        editButton.disabled = false;
+      });
+      form.append(submit, cancel);
+
+      form.addEventListener("submit", event => {
+        event.preventDefault();
+        const title = fields.title.value.trim();
+        if (!title) {
+          message.textContent = "Enter a document name before saving.";
+          fields.title.focus();
+          return;
+        }
+
+        const previous = records;
+        records = records.map(record => record.id === item.id ? {
+          ...record,
+          title,
+          category: fields.category.value.trim() || "Uncategorized",
+          tags: fields.tags.value.trim(),
+          notes: fields.notes.value.trim()
+        } : record);
+
+        if (!save()) {
+          records = previous;
+          message.textContent = "Changes could not be saved. The original record is unchanged.";
+          setStatus(message.textContent, false);
+          return;
+        }
+        render();
+      });
+
+      editButton.disabled = true;
+      card.appendChild(form);
+      fields.title.focus();
+    });
+    card.appendChild(editButton);
+
 const cloudButton = document.createElement("button");
 cloudButton.type = "button";
 cloudButton.textContent = "Save to Cloud";
@@ -740,6 +812,88 @@ async function testSupabaseDocumentsLoad() {
     button.disabled = false;
   }
 }
+
+// Cloud loading only adds missing records. Existing local versions always win.
+function mergeCloudDocuments(localRecords, rows, userId) {
+  const merged = localRecords.slice();
+  const ids = new Set(merged.map(record => String(record.id)));
+  let skipped = 0;
+  for (const row of rows) {
+    if (!row || row.user_id !== userId || row.id == null ||
+        typeof row.title !== "string" || !row.title.trim() ||
+        typeof row.created_at !== "string" || Number.isNaN(Date.parse(row.created_at))) {
+      throw new Error("A cloud document is invalid. Your local library was not changed.");
+    }
+    const id = row.local_id == null || row.local_id === ""
+      ? "cloud:" + userId + ":" + String(row.id) : String(row.local_id);
+    if (ids.has(id)) { skipped++; continue; }
+    for (const field of ["content", "category", "tags", "notes"]) {
+      if (row[field] != null && typeof row[field] !== "string") {
+        throw new Error("A cloud document has invalid fields. Your local library was not changed.");
+      }
+    }
+    merged.push({
+      id, title: row.title, category: row.category || "Uncategorized",
+      tags: row.tags || "", notes: row.notes || "", content: row.content || "",
+      created: row.created_at
+    });
+    ids.add(id);
+  }
+  return { records: merged, added: merged.length - localRecords.length, skipped };
+}
+
+async function loadDocumentsFromCloud() {
+  const button = $("loadFromCloud");
+  if (button.disabled) return;
+  if (!ready) { setStatus("Local storage is not ready. No documents loaded.", false); return; }
+  if ($("list").querySelector("form")) {
+    setStatus("Save or cancel your open edit before loading cloud documents.", false);
+    return;
+  }
+  button.disabled = true;
+  setStatus("Loading your cloud documents...");
+  try {
+    const { data: authData, error: authError } = await supabaseClient.auth.getUser();
+    if (authError || !authData.user) throw new Error("Please sign in first.");
+    const userId = authData.user.id;
+    const rows = [];
+    // Request ordered pages so libraries larger than the server response cap load fully.
+    for (let offset = 0; ; offset += 100) {
+      const { data, error } = await supabaseClient.from("documents")
+        .select("id, user_id, local_id, title, content, category, tags, notes, created_at")
+        .eq("user_id", userId).order("id", { ascending: true }).range(offset, offset + 99);
+      if (error) throw error;
+      if (!Array.isArray(data)) throw new Error("Unexpected cloud response.");
+      rows.push(...data);
+      if (data.length < 100) break;
+    }
+    const { data: currentAuth, error: currentError } = await supabaseClient.auth.getUser();
+    if (currentError || currentAuth.user?.id !== userId) {
+      throw new Error("Your sign-in changed. Please try again.");
+    }
+    // Recheck after waiting; never discard edits opened during the request.
+    if ($("list").querySelector("form")) {
+      throw new Error("Save or cancel your open edit, then load again.");
+    }
+    const result = mergeCloudDocuments(records, rows, userId);
+    if (result.added) {
+      const previous = records;
+      records = result.records;
+      if (!save()) {
+        records = previous;
+        throw new Error("Could not save locally. Your original library is unchanged.");
+      }
+      render();
+    }
+    setStatus("Cloud load complete: " + result.added + " added; " + result.skipped +
+      " already present and kept unchanged.");
+  } catch (error) {
+    setStatus("Cloud load failed: " + error.message, false);
+  } finally {
+    button.disabled = false;
+  }
+}
+
 async function checkLoginSession() {
   showLoginScreen();
 
