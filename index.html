@@ -413,6 +413,12 @@ cloudButton.addEventListener("click", () => {
   saveRecordToCloud(item, cloudButton);
 });
 card.appendChild(cloudButton);
+    const updateCloudButton = document.createElement("button");
+    updateCloudButton.type = "button";
+    updateCloudButton.className = "secondary";
+    updateCloudButton.textContent = "Update Cloud";
+    updateCloudButton.addEventListener("click", () => updateRecordInCloud(item, updateCloudButton));
+    card.appendChild(updateCloudButton);
     
     const del = document.createElement("button");
     del.className = "danger";
@@ -808,6 +814,89 @@ async function testSupabaseDocumentsLoad() {
     setStatus("Cloud save successful: " + record.title);
   } catch (error) {
     setStatus("Cloud save failed: " + error.message, false);
+  } finally {
+    button.disabled = false;
+  }
+}
+
+function cloudEditFields(record) {
+  return {
+    title: record.title.trim(),
+    category: record.category || "Uncategorized",
+    tags: record.tags || "",
+    notes: record.notes || ""
+  };
+}
+
+async function updateRecordInCloud(record, button) {
+  if (button.disabled) return;
+  if ($("list").querySelector("form")) {
+    setStatus("Save or cancel your open edit before updating the cloud.", false);
+    return;
+  }
+  button.disabled = true;
+  try {
+    if (!record || typeof record.id !== "string" ||
+        typeof record.title !== "string" || !record.title.trim()) {
+      throw new Error("This document needs a valid ID and title.");
+    }
+    const fields = cloudEditFields(record);
+    const { data: auth, error: authError } = await supabaseClient.auth.getUser();
+    if (authError || !auth.user) throw new Error("Please sign in first.");
+    const userId = auth.user.id;
+    const cloudPrefix = "cloud:" + userId + ":";
+    let query = supabaseClient.from("documents")
+      .select("id, user_id, local_id, title, category, tags, notes")
+      .eq("user_id", userId);
+    if (record.id.startsWith("cloud:")) {
+      if (!record.id.startsWith(cloudPrefix) || !record.id.slice(cloudPrefix.length)) {
+        throw new Error("This document belongs to a different account.");
+      }
+      query = query.eq("id", record.id.slice(cloudPrefix.length));
+    } else {
+      query = query.eq("local_id", record.id);
+    }
+    const { data: matches, error: readError } = await query.limit(2);
+    if (readError) throw readError;
+    if (!Array.isArray(matches) || matches.length === 0) {
+      throw new Error("No cloud copy found. Use Save to Cloud first.");
+    }
+    if (matches.length !== 1 || matches[0].user_id !== userId || matches[0].id == null) {
+      throw new Error("Could not identify a single cloud copy. Nothing was changed.");
+    }
+    const remote = matches[0];
+    const changes = Object.keys(fields).filter(key => fields[key] !== (remote[key] || ""));
+    if (!changes.length) { setStatus("Cloud copy already matches this document."); return; }
+    const preview = value => String(value || "(empty)").slice(0, 240);
+    const details = changes.map(key => key + ":\nCloud: " + preview(remote[key]) +
+      "\nThis device: " + preview(fields[key])).join("\n\n");
+    if (!confirm("Replace the cloud title, category, tags and notes with this device's saved version?\n\n" +
+        "This can replace edits saved from another device. Original document text, ID and creation date stay unchanged.\n\n" +
+        details + "\n\nLong values are shortened in this preview. Continue?")) {
+      setStatus("Cloud update cancelled. Nothing was changed.");
+      return;
+    }
+    const { data: currentAuth, error: currentError } = await supabaseClient.auth.getUser();
+    if (currentError || currentAuth.user?.id !== userId) throw new Error("Your sign-in changed. Please try again.");
+    const current = records.find(item => item.id === record.id);
+    if (!current || JSON.stringify(cloudEditFields(current)) !== JSON.stringify(fields) ||
+        $("list").querySelector("form")) {
+      throw new Error("Your local document changed. Save your edits and try again.");
+    }
+    let update = supabaseClient.from("documents").update(fields)
+      .eq("id", remote.id).eq("user_id", userId);
+    // Compare the values read above atomically with the update. A concurrent edit wins.
+    for (const key of Object.keys(fields)) {
+      update = remote[key] == null ? update.is(key, null) : update.eq(key, remote[key]);
+    }
+    const { data: updated, error: updateError } = await update.select("id");
+    if (updateError) throw updateError;
+    if (!Array.isArray(updated) || updated.length !== 1 || String(updated[0].id) !== String(remote.id)) {
+      throw new Error("The cloud copy changed or updating is not permitted. Nothing was overwritten; review and try again.");
+    }
+    setStatus("Cloud update successful: " + fields.title + ". Existing copies on other devices are kept unchanged by Load from Cloud.");
+  } catch (error) {
+    setStatus("Cloud update failed: " + error.message, false);
   } finally {
     button.disabled = false;
   }
