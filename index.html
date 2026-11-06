@@ -5,6 +5,12 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>My Knowledge Base</title>
+<meta name="theme-color" content="#0b1220">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="Knowledge Base">
+<link rel="manifest" href="./manifest.webmanifest">
+<link rel="icon" type="image/svg+xml" href="./assets/icon.svg">
+<link rel="apple-touch-icon" sizes="180x180" href="./assets/apple-touch-icon.png">
 <style>
 * { box-sizing: border-box; }
 body {
@@ -42,6 +48,9 @@ button {
 button:disabled { opacity: .55; cursor: default; }
 .actions { display: flex; gap: 8px; flex-wrap: wrap; }
 .actions button { flex: 1; min-width: 130px; }
+.backup-reminder { border-left: 4px solid #8fc1ff; }
+.backup-reminder[data-urgent="true"] { border-left-color: #ffcb7a; }
+summary { cursor: pointer; padding: 8px 0; }
 pre {
   white-space: pre-wrap; overflow-wrap: anywhere;
   color: #c6d7ee; font: inherit; font-size: 14px;
@@ -70,10 +79,14 @@ pre {
 <button type="button" id="signOutButton" onclick="signOut()">Sign Out</button>
   <p class="muted">Your personal, local-first document library</p>
   <p id="status" class="status">Starting database...</p>
-  <button type="button" id="testCloudSave" onclick="testSupabaseDocumentsSave()">Test Cloud Save</button>
-  <button type="button" id="testCloudLoad" onclick="testSupabaseDocumentsLoad()">Test Cloud Load</button>
   <button type="button" id="loadFromCloud" onclick="loadDocumentsFromCloud()">Load from Cloud</button>
   <p class="muted">Add missing cloud documents to this browser. Existing local records and edits are kept unchanged.</p>
+  <section class="panel backup-reminder" id="backupReminder" aria-labelledby="backupReminderTitle">
+    <h2 id="backupReminderTitle">Your backup</h2>
+    <p id="backupReminderText" role="status">Checking this device's backup history…</p>
+    <button type="button" class="secondary" onclick="document.getElementById('export').click()">Export a dated backup</button>
+    <p class="muted">Export downloads a separate copy. Keep it in Files or Downloads; cloud storage is not a separate backup.</p>
+  </section>
   <section class="panel">
   <h2>Dashboard Overview</h2>
   <div class="dashboard-grid">
@@ -117,6 +130,7 @@ pre {
     <p class="muted">
       Select TXT, Markdown, CSV, JSON, or PDF files from Files on your iPad.
       Their text will be saved in your local library and included in backups.
+      Keep the original file: its layout and attachments are not stored here.
     </p>
     
 <label for="importCategory">Category for imported documents</label>
@@ -132,6 +146,7 @@ pre {
  <input id="files" type="file" multiple
   accept=".txt,.md,.csv,.json,.pdf,text/plain,text/markdown,text/csv,application/json,application/pdf">
     <p class="muted">For this first version, each file must be under 2 MB.</p>
+    <p class="muted">PDFs need selectable text. Scans and pictures need text recognition first. If any selected file cannot be imported, none from that selection are added.</p>
   </section>
 
   <section class="panel">
@@ -169,6 +184,12 @@ pre {
       Restoring replaces the current catalog. Export your current catalog first.
     </p>
   </section>
+  <details class="panel">
+    <summary>Advanced connection tests</summary>
+    <p class="muted">For troubleshooting only. Test Cloud Save creates a sample document in your cloud account. Use your document's own cloud buttons for everyday work.</p>
+    <button type="button" id="testCloudSave" onclick="testSupabaseDocumentsSave()">Test Cloud Save — creates a sample</button>
+    <button type="button" id="testCloudLoad" onclick="testSupabaseDocumentsLoad()">Test Cloud Load — checks the sample</button>
+  </details>
 </main>
 
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
@@ -185,6 +206,8 @@ const supabaseClient = window.supabase.createClient(
 
 let records = [];
 let ready = false;
+let backupReminderRequest = 0;
+const BACKUP_META_KEY = "myKnowledgeBaseBackupHistoryV1";
 
 const loginScreen = document.getElementById("loginScreen");
 const appScreen = document.getElementById("appScreen");
@@ -223,6 +246,7 @@ function save() {
 }
 
 function render() {
+  refreshBackupReminder();
   $("dashboardDocuments").textContent = records.length;
 
 const categoryNames = new Set(
@@ -525,6 +549,16 @@ $("add").addEventListener("click", () => {
 $("search").addEventListener("input", render);
 $("categoryFilter").addEventListener("change", render);
 
+function validateImportedText(fileName, content, extension) {
+  if (typeof content !== "string" || !content.trim()) {
+    if (extension === "pdf") {
+      throw new Error(fileName + " has no readable selectable text. It may be a scan or image-only PDF. Use text recognition in another app, or choose a text-based PDF.");
+    }
+    throw new Error(fileName + " is empty or contains no readable text.");
+  }
+  return content;
+}
+
 $("files").addEventListener("change", async event => {
   const files = Array.from(event.target.files || []);
   if (!files.length) return;
@@ -549,6 +583,9 @@ if (!["txt", "md", "csv", "json", "pdf"].includes(ext)) {
 let content;
 
 if (ext === "pdf") {
+  if (typeof pdfjsLib === "undefined") {
+    throw new Error("The PDF reader could not load. Check your internet connection and reload the app before importing a PDF.");
+  }
   const pdfData = new Uint8Array(await file.arrayBuffer());
   const pdf = await pdfjsLib.getDocument({ data: pdfData }).promise;
   const pages = [];
@@ -567,7 +604,7 @@ if (ext === "pdf") {
   content = await file.text();
 }
 
-
+validateImportedText(file.name, content, ext);
 additions.push({
   id: makeId(),
   title: file.name,
@@ -590,25 +627,69 @@ additions.push({
     render();
     setStatus("Imported " + additions.length + " file(s) successfully.");
   } catch (error) {
-    setStatus(error.message, false);
-    alert(error.message);
+    const message = error.message + " No files from this selection were imported.";
+    setStatus(message, false);
+    alert(message);
   } finally {
     event.target.value = "";
   }
 });
 
-$("export").addEventListener("click", () => {
+function datedBackupName(date) {
+  return "my-knowledge-base-backup-" + date.toISOString().replace(/[:.]/g, "-") + ".json";
+}
+
+function backupAdvice(metadata, recordCount, currentDigest, now = Date.now()) {
+  if (!recordCount) return { urgent: false, text: "Your library is empty. Export a backup after adding documents." };
+  if (!metadata || typeof metadata.exportedAt !== "string" ||
+      !Number.isFinite(Date.parse(metadata.exportedAt)) || Date.parse(metadata.exportedAt) > now) {
+    return { urgent: true, text: "No backup export is recorded on this device. Export one now and before major changes." };
+  }
+  const date = new Date(metadata.exportedAt).toLocaleString();
+  const count = Number.isInteger(metadata.recordCount) && metadata.recordCount >= 0 ? metadata.recordCount : "unknown";
+  const detail = "Last export requested: " + date + " · " + count + " records. Check that you kept the downloaded file.";
+  if (!metadata.digest || !currentDigest) return { urgent: true, text: detail + " Backup freshness could not be compared. Export before major changes." };
+  if (metadata.digest !== currentDigest) return { urgent: true, text: "Your library has changed since the last backup export. " + detail };
+  if (now - Date.parse(metadata.exportedAt) >= 7 * 24 * 60 * 60 * 1000) {
+    return { urgent: true, text: "Your last backup export was at least a week ago. " + detail };
+  }
+  return { urgent: false, text: "Your library matches the last requested backup export. " + detail };
+}
+
+async function digestLibrary(serialized) {
+  const bytes = new TextEncoder().encode(serialized);
+  const hash = await crypto.subtle.digest("SHA-256", bytes);
+  return Array.from(new Uint8Array(hash), byte => byte.toString(16).padStart(2, "0")).join("");
+}
+
+async function refreshBackupReminder() {
+  const request = ++backupReminderRequest;
+  const serialized = JSON.stringify(records);
+  const count = records.length;
+  let metadata = null;
+  let digest = null;
+  try { metadata = JSON.parse(localStorage.getItem(BACKUP_META_KEY) || "null"); } catch (error) { }
+  try { digest = await digestLibrary(serialized); } catch (error) { }
+  if (request !== backupReminderRequest) return;
+  const advice = backupAdvice(metadata, count, digest);
+  $("backupReminderText").textContent = advice.text;
+  $("backupReminder").dataset.urgent = String(advice.urgent);
+}
+
+$("export").addEventListener("click", async () => {
   if (!ready) {
     alert("Database is not ready. No backup was created.");
     return;
   }
 
   try {
+    const exportedAt = new Date();
+    const snapshot = JSON.stringify(records);
     const backup = {
       app: "My Knowledge Base",
       version: 1,
-      exportedAt: new Date().toISOString(),
-      records
+      exportedAt: exportedAt.toISOString(),
+      records: JSON.parse(snapshot)
     };
     const blob = new Blob(
       [JSON.stringify(backup, null, 2)],
@@ -617,12 +698,20 @@ $("export").addEventListener("click", () => {
     const url = URL.createObjectURL(blob);
     const link = document.createElement("a");
     link.href = url;
-    link.download = "my-knowledge-base-backup.json";
+    link.download = datedBackupName(exportedAt);
     document.body.appendChild(link);
     link.click();
     link.remove();
+    let digest = null;
+    try { digest = await digestLibrary(snapshot); } catch (error) { }
+    try {
+      localStorage.setItem(BACKUP_META_KEY, JSON.stringify({
+        exportedAt: backup.exportedAt, recordCount: backup.records.length, digest, fileName: link.download
+      }));
+    } catch (error) { /* The download still works if optional history cannot be saved. */ }
+    refreshBackupReminder();
     setTimeout(() => URL.revokeObjectURL(url), 3000);
-    setStatus("Backup prepared. Save the downloaded file in Files.");
+    setStatus("Backup download requested: " + link.download + ". Keep the file in Files or Downloads.");
   } catch (error) {
     setStatus("Backup failed: " + error.message, false);
   }
