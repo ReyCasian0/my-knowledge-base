@@ -38,6 +38,8 @@ button {
 }
 .tag { color: #8fc1ff; font-size: 13px; }
 .status { color: #8ee6b0; }
+.cloud-status { border-left: 3px solid #8fc1ff; padding: 8px 12px; background: #0b1220; }
+button:disabled { opacity: .55; cursor: default; }
 .actions { display: flex; gap: 8px; flex-wrap: wrap; }
 .actions button { flex: 1; min-width: 130px; }
 pre {
@@ -134,6 +136,8 @@ pre {
 
   <section class="panel">
     <h2>My documents</h2>
+    <p class="muted">Save to Cloud creates the first cloud copy. Update Cloud sends this device's edits. Refresh from Cloud brings cloud edits onto this device. Both directions ask before replacing saved fields.</p>
+    <p class="muted">Cloud status describes the editable title, category, tags and notes at the last check. It is not automatic syncing. Use Check cloud status for a fresh comparison.</p>
     
 <label for="categoryFilter">Show category</label>
 <select id="categoryFilter">
@@ -327,6 +331,12 @@ const matches = records.filter(item => {
     notes.textContent = item.notes || "";
     card.appendChild(notes);
 
+    const cloudStatus = document.createElement("p");
+    cloudStatus.className = "cloud-status";
+    cloudStatus.setAttribute("role", "status");
+    cloudStatus.textContent = describeCloudStatus(item, cloudUserId);
+    card.appendChild(cloudStatus);
+
     if (item.content) {
       const preview = document.createElement("details");
       const summary = document.createElement("summary");
@@ -408,7 +418,7 @@ const matches = records.filter(item => {
 
 const cloudButton = document.createElement("button");
 cloudButton.type = "button";
-cloudButton.textContent = "Save to Cloud";
+cloudButton.textContent = "Save to Cloud — first copy";
 cloudButton.addEventListener("click", () => {
   saveRecordToCloud(item, cloudButton);
 });
@@ -416,15 +426,22 @@ card.appendChild(cloudButton);
     const updateCloudButton = document.createElement("button");
     updateCloudButton.type = "button";
     updateCloudButton.className = "secondary";
-    updateCloudButton.textContent = "Update Cloud";
+    updateCloudButton.textContent = "Update Cloud — send edits";
     updateCloudButton.addEventListener("click", () => updateRecordInCloud(item, updateCloudButton));
     card.appendChild(updateCloudButton);
     const refreshCloudButton = document.createElement("button");
     refreshCloudButton.type = "button";
     refreshCloudButton.className = "secondary";
-    refreshCloudButton.textContent = "Refresh from Cloud";
+    refreshCloudButton.textContent = "Refresh from Cloud — receive edits";
     refreshCloudButton.addEventListener("click", () => refreshRecordFromCloud(item, refreshCloudButton));
     card.appendChild(refreshCloudButton);
+    const checkCloudButton = document.createElement("button");
+    checkCloudButton.type = "button";
+    checkCloudButton.className = "secondary";
+    checkCloudButton.textContent = "Check cloud status";
+    checkCloudButton.addEventListener("click", () => checkRecordCloudStatus(item, checkCloudButton));
+    card.appendChild(checkCloudButton);
+
     
     const del = document.createElement("button");
     del.className = "danger";
@@ -655,7 +672,7 @@ async function signIn(event) {
   message.textContent = "Signing in...";
 
   try {
-    const { error } = await supabaseClient.auth.signInWithPassword({
+    const { data, error } = await supabaseClient.auth.signInWithPassword({
       email: email,
       password: password
     });
@@ -666,6 +683,8 @@ async function signIn(event) {
     }
 
     message.textContent = "Sign in successful!";
+    cloudUserId = data.user?.id || null;
+    render();
     showAppScreen();
   } catch (error) {
     message.textContent = "Unable to sign in. Please try again.";
@@ -682,6 +701,7 @@ async function signOut() {
 
   document.getElementById("loginPassword").value = "";
   document.getElementById("loginMessage").textContent = "";
+  cloudUserId = null;
   showLoginScreen();
 }
 
@@ -795,6 +815,7 @@ async function testSupabaseDocumentsLoad() {
       throw new Error("Invalid document creation date.");
     }
 
+    const savedFields = cloudEditFields(record);
     const { error } = await supabaseClient
       .from("documents")
       .insert({
@@ -817,6 +838,8 @@ async function testSupabaseDocumentsLoad() {
       throw error;
     }
 
+    rememberCloudStatus(record.id, authData.user.id, savedFields);
+    repaintCloudStatuses();
     setStatus("Cloud save successful: " + record.title);
   } catch (error) {
     setStatus("Cloud save failed: " + error.message, false);
@@ -832,6 +855,77 @@ function cloudEditFields(record) {
     tags: record.tags || "",
     notes: record.notes || ""
   };
+}
+
+const CLOUD_STATUS_KEY = "myKnowledgeBaseCloudStatusV1";
+let cloudUserId = null;
+let cloudStatusCache = {};
+try {
+  const storedStatus = JSON.parse(localStorage.getItem(CLOUD_STATUS_KEY) || "{}");
+  if (storedStatus && typeof storedStatus === "object" && !Array.isArray(storedStatus)) cloudStatusCache = storedStatus;
+} catch (error) { /* Status is optional; never stop the document library from opening. */ }
+
+function statusCacheKey(recordId, userId) { return JSON.stringify([userId, recordId]); }
+
+function rememberCloudStatus(recordId, userId, fields, persist = true) {
+  cloudStatusCache[statusCacheKey(recordId, userId)] = {
+    checkedAt: new Date().toISOString(), fields: fields ? { ...fields } : null
+  };
+  // If caching fails, the current session still shows the verified comparison.
+  if (persist) persistCloudStatuses();
+}
+
+function persistCloudStatuses() {
+  try { localStorage.setItem(CLOUD_STATUS_KEY, JSON.stringify(cloudStatusCache)); } catch (error) { }
+}
+
+function describeCloudStatus(record, userId) {
+  if (!userId) return "Cloud status: sign in to check this account's copy.";
+  const snapshot = cloudStatusCache[statusCacheKey(record.id, userId)];
+  if (!snapshot || typeof snapshot.checkedAt !== "string" || Number.isNaN(Date.parse(snapshot.checkedAt))) {
+    return "Cloud status: not checked on this device. Check before choosing a direction.";
+  }
+  const time = new Date(snapshot.checkedAt).toLocaleString();
+  if (snapshot.fields === null) return "Local only at last check — no cloud copy found. Checked " + time + ".";
+  if (!snapshot.fields || ["title", "category", "tags", "notes"].some(key => typeof snapshot.fields[key] !== "string")) {
+    return "Cloud status: not checked on this device.";
+  }
+  const matches = JSON.stringify(cloudEditFields(record)) === JSON.stringify(cloudEditFields(snapshot.fields));
+  return matches
+    ? "Matches cloud when last checked · " + time + "."
+    : "Versions differ / local edits pending · cloud last checked " + time + ". Review before sending or receiving.";
+}
+
+function repaintCloudStatuses() {
+  // Avoid destroying a form opened while a request was running.
+  if (typeof document !== "undefined" && !$("list").querySelector("form")) render();
+}
+
+async function checkRecordCloudStatus(record, button) {
+  if (button.disabled) return;
+  if ($("list").querySelector("form")) {
+    setStatus("Save or cancel your open edit before checking cloud status.", false); return;
+  }
+  button.disabled = true;
+  try {
+    const { data: auth, error: authError } = await supabaseClient.auth.getUser();
+    if (authError || !auth.user) throw new Error("Please sign in first.");
+    const userId = auth.user.id;
+    let remote;
+    try { remote = await readCloudCopyForRefresh(record, userId); }
+    catch (error) {
+      if (error.code !== "NO_CLOUD_COPY") throw error;
+      remote = null;
+    }
+    const { data: current, error: currentError } = await supabaseClient.auth.getUser();
+    if (currentError || current.user?.id !== userId) throw new Error("Your sign-in changed. Please try again.");
+    cloudUserId = userId;
+    rememberCloudStatus(record.id, userId, remote ? cloudEditFields(remote) : null);
+    repaintCloudStatuses();
+    setStatus("Cloud status checked. Neither copy was changed.");
+  } catch (error) {
+    setStatus("Cloud status check failed: " + error.message + ". Previous status is only a last-known comparison.", false);
+  } finally { button.disabled = false; }
 }
 
 async function updateRecordInCloud(record, button) {
@@ -872,7 +966,11 @@ async function updateRecordInCloud(record, button) {
     }
     const remote = matches[0];
     const changes = Object.keys(fields).filter(key => fields[key] !== (remote[key] || ""));
-    if (!changes.length) { setStatus("Cloud copy already matches this document."); return; }
+    if (!changes.length) {
+      rememberCloudStatus(record.id, userId, cloudEditFields(remote));
+      repaintCloudStatuses();
+      setStatus("Cloud copy already matches this document."); return;
+    }
     const preview = value => String(value || "(empty)").slice(0, 240);
     const details = changes.map(key => key + ":\nCloud: " + preview(remote[key]) +
       "\nThis device: " + preview(fields[key])).join("\n\n");
@@ -900,7 +998,9 @@ async function updateRecordInCloud(record, button) {
     if (!Array.isArray(updated) || updated.length !== 1 || String(updated[0].id) !== String(remote.id)) {
       throw new Error("The cloud copy changed or updating is not permitted. Nothing was overwritten; review and try again.");
     }
-    setStatus("Cloud update successful: " + fields.title + ". Existing copies on other devices are kept unchanged by Load from Cloud.");
+    rememberCloudStatus(record.id, userId, fields);
+    repaintCloudStatuses();
+    setStatus("Cloud update successful: " + fields.title + ". Use Refresh from Cloud on your other device to receive these edits.");
   } catch (error) {
     setStatus("Cloud update failed: " + error.message, false);
   } finally {
@@ -923,7 +1023,12 @@ async function readCloudCopyForRefresh(record, userId) {
   }
   const { data, error } = await query.limit(2);
   if (error) throw error;
-  if (!Array.isArray(data) || data.length === 0) throw new Error("No cloud copy found. Nothing was changed.");
+  if (!Array.isArray(data)) throw new Error("Unexpected cloud response. Nothing was changed.");
+  if (data.length === 0) {
+    const missing = new Error("No cloud copy found. Nothing was changed.");
+    missing.code = "NO_CLOUD_COPY";
+    throw missing;
+  }
   if (data.length !== 1 || data[0].user_id !== userId || data[0].id == null) {
     throw new Error("Could not identify a single cloud copy. Nothing was changed.");
   }
@@ -957,7 +1062,11 @@ async function refreshRecordFromCloud(record, button) {
     const fields = cloudEditFields(remote);
     const localFields = cloudEditFields(original);
     const changes = Object.keys(fields).filter(key => fields[key] !== localFields[key]);
-    if (!changes.length) { setStatus("This device already matches the cloud copy."); return; }
+    if (!changes.length) {
+      rememberCloudStatus(record.id, userId, fields);
+      repaintCloudStatuses();
+      setStatus("This device already matches the cloud copy."); return;
+    }
     const preview = value => String(value || "(empty)").slice(0, 240);
     const details = changes.map(key => key + ":\nThis device: " + preview(localFields[key]) +
       "\nCloud: " + preview(fields[key])).join("\n\n");
@@ -987,6 +1096,7 @@ async function refreshRecordFromCloud(record, button) {
       records = previous;
       throw new Error("Could not save locally. Your original record is unchanged.");
     }
+    rememberCloudStatus(record.id, userId, fields);
     render();
     setStatus("Cloud refresh successful: " + fields.title + ". Only this device's copy was updated.");
   } catch (error) {
@@ -1068,6 +1178,15 @@ async function loadDocumentsFromCloud() {
       }
       render();
     }
+    cloudUserId = userId;
+    for (const row of rows) {
+      const id = row.local_id == null || row.local_id === "" ? "cloud:" + userId + ":" + String(row.id) : String(row.local_id);
+      if (typeof row.title === "string" && ["category", "tags", "notes"].every(key => row[key] == null || typeof row[key] === "string")) {
+        rememberCloudStatus(id, userId, cloudEditFields(row), false);
+      }
+    }
+    repaintCloudStatuses();
+    persistCloudStatuses();
     setStatus("Cloud load complete: " + result.added + " added; " + result.skipped +
       " already present and kept unchanged.");
   } catch (error) {
@@ -1084,10 +1203,13 @@ async function checkLoginSession() {
     const { data, error } = await supabaseClient.auth.getUser();
 
     if (error || !data.user) {
+      cloudUserId = null;
       showLoginScreen();
       return;
     }
 
+    cloudUserId = data.user.id;
+    render();
     showAppScreen();
     await testSupabaseDocumentsRead();
   } catch (error) {
