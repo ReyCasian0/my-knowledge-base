@@ -102,8 +102,8 @@ input, textarea, select {
   border: 1px solid var(--control-line);
 }
 input::placeholder, textarea::placeholder { color: var(--muted); opacity: 1; }
-.scan-option { display: flex; align-items: center; gap: 10px; margin-top: 12px; }
-.scan-option input { width: 20px; min-height: 20px; margin: 0; }
+.check-option { display: flex; align-items: center; gap: 10px; margin-top: 12px; }
+.check-option input { width: 20px; min-height: 20px; margin: 0; }
 button {
   background: var(--primary); color: white;
   border: 0; font-weight: 600; cursor: pointer;
@@ -200,6 +200,12 @@ pre {
     <div class="library-tools">
       <button type="button" id="loadFromCloud" onclick="loadDocumentsFromCloud()">Load from Cloud</button>
       <p class="muted">Add missing cloud documents to this browser while keeping existing records and edits.</p>
+      <label class="check-option">
+        <input id="autoCloudLoad" type="checkbox" aria-describedby="autoCloudHelp">
+        Automatically load missing cloud records
+      </label>
+      <p class="muted" id="autoCloudHelp">On this browser, check when you open the library, sign in, or reconnect. Review differences on each record before updating either copy.</p>
+      <p id="autoCloudStatus" class="status" role="status"></p>
       <p id="status" class="status" role="status">Starting database...</p>
     </div>
   </header>
@@ -268,7 +274,7 @@ pre {
   <option value="Uncategorized">Uncategorized</option>
 </select>
 
-    <label class="scan-option">
+    <label class="check-option">
       <input id="recognizeScans" type="checkbox" aria-describedby="scanHelp">
       Recognize text in scanned PDFs (English)
     </label>
@@ -339,6 +345,7 @@ const supabaseClient = window.supabase.createClient(
 );
 
 let records = [];
+let lastStoredLibrary = null;
 let ready = false;
 let backupReminderRequest = 0;
 const BACKUP_META_KEY = "myKnowledgeBaseBackupHistoryV1";
@@ -355,6 +362,9 @@ function showLoginScreen() {
 function showAppScreen() {
   loginScreen.hidden = true;
   appScreen.hidden = false;
+  $("autoCloudLoad").checked = autoCloudLoadEnabled(cloudUserId);
+  setAutoCloudStatus("");
+  loadMissingCloudRecordsAutomatically();
 }
   
 const $ = id => document.getElementById(id);
@@ -365,6 +375,21 @@ themeSelect.addEventListener("change", () => {
   applyTheme(themeSelect.value);
   try { localStorage.setItem(themeKey, themeSelect.value); } catch (error) { }
 });
+
+$("autoCloudLoad").addEventListener("change", event => {
+  const toggle = event.currentTarget;
+  if (appScreen.hidden || !cloudUserId) return;
+  try {
+    localStorage.setItem(AUTO_CLOUD_LOAD_KEY + cloudUserId, toggle.checked ? "on" : "off");
+  } catch {
+    toggle.checked = autoCloudLoadEnabled(cloudUserId);
+    setAutoCloudStatus("This browser could not save the automatic loading setting.", true);
+    return;
+  }
+  setAutoCloudStatus(toggle.checked ? "Automatic loading is on for this browser." : "Automatic loading is off.");
+  loadMissingCloudRecordsAutomatically();
+});
+window.addEventListener("online", loadMissingCloudRecordsAutomatically);
 
 const offlineForm = $("saveOfflineCopy");
 const removeOffline = $("removeOfflineCopy");
@@ -449,7 +474,9 @@ function setStatus(message, good = true) {
 function save() {
   if (!ready) return false;
   try {
-    localStorage.setItem(KEY, JSON.stringify(records));
+    const serialized = JSON.stringify(records);
+    localStorage.setItem(KEY, serialized);
+    lastStoredLibrary = serialized;
     setStatus("Saved on this browser.");
     return true;
   } catch (error) {
@@ -711,6 +738,7 @@ try {
   const existing = localStorage.getItem(KEY);
   records = existing ? JSON.parse(existing).map(normaliseRecord) : [];
   if (!Array.isArray(records)) throw new Error("Invalid saved records.");
+  lastStoredLibrary = existing;
   ready = true;
   setStatus("Local database ready.");
 } catch (error) {
@@ -1549,6 +1577,26 @@ async function refreshRecordFromCloud(record, button) {
   }
 }
 
+const AUTO_CLOUD_LOAD_KEY = "myKnowledgeBaseAutoCloudLoad:";
+
+function autoCloudLoadEnabled(userId) {
+  if (!userId) return false;
+  try { return localStorage.getItem(AUTO_CLOUD_LOAD_KEY + userId) === "on"; }
+  catch { return false; }
+}
+
+function setAutoCloudStatus(message, error = false) {
+  const status = $("autoCloudStatus");
+  status.textContent = message;
+  status.dataset.error = String(error);
+}
+
+function loadMissingCloudRecordsAutomatically() {
+  if (!appScreen.hidden && navigator.onLine !== false && autoCloudLoadEnabled(cloudUserId)) {
+    void loadDocumentsFromCloud(true);
+  }
+}
+
 // Cloud loading only adds missing records. Existing local versions always win.
 function mergeCloudDocuments(localRecords, rows, userId) {
   const merged = localRecords.slice();
@@ -1578,19 +1626,24 @@ function mergeCloudDocuments(localRecords, rows, userId) {
   return { records: merged, added: merged.length - localRecords.length, skipped };
 }
 
-async function loadDocumentsFromCloud() {
+async function loadDocumentsFromCloud(automatic = false) {
   const button = $("loadFromCloud");
   if (button.disabled) return;
-  if (!ready) { setStatus("Local storage is not ready. No documents loaded.", false); return; }
-  if ($("list").querySelector("form")) {
-    setStatus("Save or cancel your open edit before loading cloud documents.", false);
+  const report = (message, error = false) => automatic ? setAutoCloudStatus(message, error) : setStatus(message, !error);
+  const editingOrViewing = () => $("list").querySelector(automatic ? "form, details[open], .file-actions button:disabled" : "form");
+  const paused = automatic ? "Automatic load skipped while a record is open. Use Load from Cloud when you’re ready."
+    : "Save or cancel your open edit before loading cloud documents.";
+  if (!ready) { report("Local storage is not ready. No documents loaded.", true); return; }
+  if (editingOrViewing()) {
+    report(paused, true);
     return;
   }
+  const signedInUser = cloudUserId;
   button.disabled = true;
-  setStatus("Loading your cloud documents...");
+  report(automatic ? "Checking for missing cloud records…" : "Loading your cloud documents...");
   try {
     const { data: authData, error: authError } = await supabaseClient.auth.getUser();
-    if (authError || !authData.user) throw new Error("Please sign in first.");
+    if (authError || !authData.user || authData.user.id !== signedInUser) throw new Error("Please sign in again.");
     const userId = authData.user.id;
     const rows = [];
     // Request ordered pages so libraries larger than the server response cap load fully.
@@ -1604,36 +1657,52 @@ async function loadDocumentsFromCloud() {
       if (data.length < 100) break;
     }
     const { data: currentAuth, error: currentError } = await supabaseClient.auth.getUser();
+    if (cloudUserId !== signedInUser || appScreen.hidden) return;
+    if (automatic && !autoCloudLoadEnabled(userId)) return;
     if (currentError || currentAuth.user?.id !== userId) {
       throw new Error("Your sign-in changed. Please try again.");
     }
     // Recheck after waiting; never discard edits opened during the request.
-    if ($("list").querySelector("form")) {
-      throw new Error("Save or cancel your open edit, then load again.");
+    if (editingOrViewing()) {
+      report(paused, true);
+      return;
     }
     const result = mergeCloudDocuments(records, rows, userId);
     if (result.added) {
+      if (localStorage.getItem(KEY) !== lastStoredLibrary) {
+        throw new Error("This browser’s library changed in another tab. Reload before loading from the cloud.");
+      }
       const previous = records;
       records = result.records;
       if (!save()) {
         records = previous;
         throw new Error("Could not save locally. Your original library is unchanged.");
       }
-      render();
     }
-    cloudUserId = userId;
+    const localById = new Map(records.map(record => [record.id, record]));
+    const differing = new Set();
     for (const row of rows) {
       const id = row.local_id == null || row.local_id === "" ? "cloud:" + userId + ":" + String(row.id) : String(row.local_id);
       if (typeof row.title === "string" && ["category", "tags", "notes"].every(key => row[key] == null || typeof row[key] === "string")) {
-        rememberCloudStatus(id, userId, cloudEditFields(row), false);
+        const fields = cloudEditFields(row);
+        rememberCloudStatus(id, userId, fields, false);
+        const local = localById.get(id);
+        if (local && JSON.stringify(cloudEditFields(local)) !== JSON.stringify(fields)) differing.add(id);
       }
     }
     repaintCloudStatuses();
     persistCloudStatuses();
-    setStatus("Cloud load complete: " + result.added + " added; " + result.skipped +
-      " already present and kept unchanged.");
+    if (automatic) {
+      const changes = differing.size ? " " + differing.size + (differing.size === 1 ? " record has" : " records have") +
+        " different versions. Review from the record before updating either copy." : "";
+      report("Automatic load complete: " + result.added + " added. Existing records kept unchanged." + changes);
+    } else {
+      report("Cloud load complete: " + result.added + " added; " + result.skipped + " already present and kept unchanged.");
+    }
   } catch (error) {
-    setStatus("Cloud load failed: " + error.message, false);
+    if (cloudUserId === signedInUser && !appScreen.hidden && (!automatic || autoCloudLoadEnabled(signedInUser))) {
+      report((automatic ? "Automatic load failed: " : "Cloud load failed: ") + error.message, true);
+    }
   } finally {
     button.disabled = false;
   }
