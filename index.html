@@ -11,6 +11,8 @@
 <link rel="manifest" href="./manifest.webmanifest">
 <link rel="icon" type="image/svg+xml" href="./assets/icon.svg">
 <link rel="apple-touch-icon" sizes="180x180" href="./assets/apple-touch-icon.png">
+<script defer src="https://cdn.jsdelivr.net/npm/@zip.js/zip.js@2.8.17/dist/zip.min.js"
+  integrity="sha384-vbmgf7WpK+JtRryAgb0jiM2HhxG+bOJXunO/H+mElJ3mHYwiPRWYUd5FsYJEZokm" crossorigin="anonymous"></script>
 <style>
 * { box-sizing: border-box; }
 body {
@@ -130,9 +132,9 @@ pre {
   <section class="panel">
     <h2>Import text documents</h2>
     <p class="muted">
-      Select TXT, Markdown, CSV, JSON, or PDF files from Files on your iPad.
+      Select TXT, Markdown, CSV, JSON, PDF, or Word (.docx) files.
       Their text will be saved in your local library and included in backups.
-      Keep the original file: its layout and attachments are not stored here.
+      Use Original file on the saved record to keep the file and its formatting separately.
     </p>
     
 <label for="importCategory">Category for imported documents</label>
@@ -146,9 +148,9 @@ pre {
 </select>
 
  <input id="files" type="file" multiple
-  accept=".txt,.md,.csv,.json,.pdf,text/plain,text/markdown,text/csv,application/json,application/pdf">
+  accept=".txt,.md,.csv,.json,.pdf,.docx,text/plain,text/markdown,text/csv,application/json,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document">
     <p class="muted">For this first version, each file must be under 2 MB.</p>
-    <p class="muted">PDFs need selectable text. Scans and pictures need text recognition first. If any selected file cannot be imported, none from that selection are added.</p>
+    <p class="muted">PDFs need selectable text. Word import reads the main document text, including tables. Scans and pictures need text recognition first. If a selected file fails, the whole selection is skipped.</p>
   </section>
 
   <section class="panel">
@@ -369,9 +371,9 @@ const matches = records.filter(item => {
     if (item.content) {
       const preview = document.createElement("details");
       const summary = document.createElement("summary");
-      summary.textContent = "View imported text";
+      summary.textContent = "Preview searchable text";
       const text = document.createElement("pre");
-      text.textContent = item.content.slice(0, 12000);
+      text.textContent = textPreview(item.content);
       preview.append(summary, text);
       card.appendChild(preview);
     }
@@ -565,6 +567,69 @@ function validateImportedText(fileName, content, extension) {
   return content;
 }
 
+const WORD_FILE_TYPE = "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
+const WORD_NAMESPACES = [
+  "http://schemas.openxmlformats.org/wordprocessingml/2006/main",
+  "http://purl.oclc.org/ooxml/wordprocessingml/main"
+];
+
+async function readWordText(file, fileName = file.name) {
+  if (!globalThis.zip) {
+    throw new Error("The Word reader could not load. Check your internet connection and reload the app.");
+  }
+
+  const reader = new zip.ZipReader(new zip.BlobReader(file));
+  const limit = 4 * 1024 * 1024;
+  const chunks = [];
+  let size = 0;
+  try {
+    const entries = await reader.getEntries();
+    const parts = entries.filter(entry => entry.filename === "word/document.xml" && !entry.directory);
+    if (parts.length !== 1 || parts[0].encrypted || parts[0].uncompressedSize > limit) throw new Error();
+    await parts[0].getData(new WritableStream({
+      write(chunk) {
+        size += chunk.byteLength;
+        if (size > limit) throw new Error();
+        chunks.push(chunk);
+      }
+    }), { useWebWorkers: false, checkSignature: true });
+  } catch {
+    throw new Error(fileName + " could not be read. Choose an unprotected .docx file with a smaller document body.");
+  } finally {
+    await reader.close();
+  }
+
+  const bytes = new Uint8Array(await new Blob(chunks).arrayBuffer());
+  const encoding = bytes[0] === 0xff && bytes[1] === 0xfe ? "utf-16le"
+    : bytes[0] === 0xfe && bytes[1] === 0xff ? "utf-16be" : "utf-8";
+  const xml = new TextDecoder(encoding).decode(bytes);
+  if (/<!DOCTYPE/i.test(xml)) throw new Error(fileName + " has an unsupported Word document structure.");
+  const root = new DOMParser().parseFromString(xml, "application/xml").documentElement;
+  const ns = root.namespaceURI;
+  const body = Array.from(root.children).find(child => child.namespaceURI === ns && child.localName === "body");
+  if (root.localName !== "document" || !WORD_NAMESPACES.includes(ns) || !body) {
+    throw new Error(fileName + " has an unsupported Word document structure.");
+  }
+
+  return Array.from(body.getElementsByTagNameNS(ns, "p"), paragraph => {
+    const walker = paragraph.ownerDocument.createTreeWalker(paragraph, NodeFilter.SHOW_ELEMENT, node => {
+      if (node.namespaceURI !== ns) return NodeFilter.FILTER_SKIP;
+      if (node.localName === "p") return NodeFilter.FILTER_REJECT;
+      return ["t", "tab", "br", "cr"].includes(node.localName) ? NodeFilter.FILTER_ACCEPT : NodeFilter.FILTER_SKIP;
+    });
+    const text = [];
+    for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+      text.push(node.localName === "t" ? node.textContent : node.localName === "tab" ? "\t" : "\n");
+    }
+    return text.join("");
+  }).join("\n");
+}
+
+function textPreview(text) {
+  const limit = 12000;
+  return text.length > limit ? text.slice(0, limit) + "\n\n[Preview ends here]" : text;
+}
+
 $("files").addEventListener("change", async event => {
   const files = Array.from(event.target.files || []);
   if (!files.length) return;
@@ -577,49 +642,43 @@ $("files").addEventListener("change", async event => {
         throw new Error(file.name + " is larger than 2 MB.");
       }
 
-      
-const ext = file.name.split(".").pop().toLowerCase();
+      const ext = file.name.split(".").pop().toLowerCase();
+      if (!Object.hasOwn(ORIGINAL_FILE_TYPES, ext)) {
+        throw new Error(file.name + " is not supported yet. Try TXT, MD, CSV, JSON, PDF, or DOCX.");
+      }
 
-if (!["txt", "md", "csv", "json", "pdf"].includes(ext)) {
-  throw new Error(
-    file.name + " is not supported yet. Try TXT, MD, CSV, JSON, or PDF."
-  );
-}
+      let content;
+      if (ext === "pdf") {
+        if (typeof pdfjsLib === "undefined") {
+          throw new Error("The PDF reader could not load. Check your internet connection and reload the app before importing a PDF.");
+        }
+        const pdfData = new Uint8Array(await file.arrayBuffer());
+        const pdf = await pdfjsLib.getDocument({ data: pdfData, isEvalSupported: false }).promise;
+        const pages = [];
 
-let content;
+        for (let pageNum = 1; pageNum <= pdf.numPages; pageNum++) {
+          const page = await pdf.getPage(pageNum);
+          const textContent = await page.getTextContent();
+          pages.push(textContent.items.map(item => item.str || "").join(" "));
+        }
 
-if (ext === "pdf") {
-  if (typeof pdfjsLib === "undefined") {
-    throw new Error("The PDF reader could not load. Check your internet connection and reload the app before importing a PDF.");
-  }
-  const pdfData = new Uint8Array(await file.arrayBuffer());
-  const pdf = await pdfjsLib.getDocument({ data: pdfData }).promise;
-  const pages = [];
+        content = pages.join("\n\n");
+      } else if (ext === "docx") {
+        content = await readWordText(file);
+      } else {
+        content = await file.text();
+      }
 
-  for (let pageNum = 1; pageNum <= pdf.numPages; pageNum++) {
-    const page = await pdf.getPage(pageNum);
-    const textContent = await page.getTextContent();
-    const pageText = textContent.items
-      .map(item => item.str || "")
-      .join(" ");
-    pages.push(pageText);
-  }
-
-  content = pages.join("\n\n");
-} else {
-  content = await file.text();
-}
-
-validateImportedText(file.name, content, ext);
-additions.push({
-  id: makeId(),
-  title: file.name,
-  category: $("importCategory").value,
-  tags: "imported, " + ext,
-  notes: ext === "pdf" ? "Imported PDF document" : "Imported text document",
-  content,
-  created: new Date().toISOString()
-});
+      validateImportedText(file.name, content, ext);
+      additions.push({
+        id: makeId(),
+        title: file.name,
+        category: $("importCategory").value,
+        tags: "imported, " + ext,
+        notes: ext === "pdf" ? "Imported PDF document" : ext === "docx" ? "Imported Word document" : "Imported text document",
+        content,
+        created: new Date().toISOString()
+      });
     }
 
     const previous = records;
@@ -1295,7 +1354,8 @@ const ORIGINAL_FILE_BUCKET = "knowledge-base-originals";
 const ORIGINAL_FILE_LIMIT = 2 * 1024 * 1024;
 const originalFileUrls = new Set();
 const ORIGINAL_FILE_TYPES = Object.freeze({
-  pdf: "application/pdf", txt: "text/plain", md: "text/markdown", csv: "text/csv", json: "application/json"
+  pdf: "application/pdf", txt: "text/plain", md: "text/markdown", csv: "text/csv", json: "application/json",
+  docx: WORD_FILE_TYPE
 });
 
 function revokeOriginalFileLinks() {
@@ -1314,7 +1374,7 @@ function validateOriginalFile(file) {
   const name = safeOriginalFileName(file.name);
   const extension = name.includes(".") ? name.split(".").pop().toLowerCase() : "";
   if (!name || name.length > 240 || !Object.hasOwn(ORIGINAL_FILE_TYPES, extension)) {
-    throw new Error("Choose a PDF, TXT, Markdown, CSV or JSON file with a filename under 241 characters.");
+    throw new Error("Choose a PDF, TXT, Markdown, CSV, JSON, or DOCX file with a filename under 241 characters.");
   }
   return { name, type: ORIGINAL_FILE_TYPES[extension] };
 }
@@ -1385,7 +1445,7 @@ async function fetchOriginalFile(record) {
   const originalName = safeOriginalFileName(info?.userMetadata?.originalName || info?.metadata?.originalName);
   const name = originalName && originalName.length <= 240 && originalName.toLowerCase().endsWith("." + extension)
     ? originalName : "original-file." + extension;
-  return { name, blob };
+  return { name, blob, type: mime };
 }
 
 function createOriginalFilePanel(record) {
@@ -1400,7 +1460,7 @@ function createOriginalFilePanel(record) {
   label.textContent = "Choose an original file to attach to “" + record.title + "”";
   const picker = document.createElement("input");
   picker.type = "file";
-  picker.accept = ".pdf,.txt,.md,.csv,.json";
+  picker.accept = ".pdf,.txt,.md,.csv,.json,.docx";
   label.appendChild(picker);
   const upload = document.createElement("button");
   upload.type = "button";
@@ -1453,7 +1513,7 @@ function createOriginalFilePanel(record) {
     clearDownload();
     message.textContent = "Checking for an attached original…";
     try {
-      const { name, blob } = await fetchOriginalFile(record);
+      const { name, blob, type } = await fetchOriginalFile(record);
       if (!panel.isConnected || !panel.open) return;
       const link = document.createElement("a");
       const url = URL.createObjectURL(new Blob([blob], { type: "application/octet-stream" }));
@@ -1464,6 +1524,22 @@ function createOriginalFilePanel(record) {
       link.textContent = "Download original: " + name;
       downloadArea.appendChild(link);
       message.textContent = "Your original is ready. Tap the download link to save it.";
+      if (type === WORD_FILE_TYPE || type.startsWith("text/") || type === "application/json") {
+        const previewButton = document.createElement("button");
+        previewButton.type = "button";
+        previewButton.className = "secondary";
+        previewButton.textContent = "Preview original text";
+        previewButton.addEventListener("click", async () => {
+          previewButton.disabled = true;
+          const preview = document.createElement("pre");
+          try {
+            const text = type === WORD_FILE_TYPE ? await readWordText(blob, name) : await blob.text();
+            preview.textContent = textPreview(text) || "This file has no text to preview.";
+          } catch (error) { preview.textContent = "Could not preview this file: " + error.message; }
+          previewButton.replaceWith(preview);
+        });
+        downloadArea.appendChild(previewButton);
+      }
       setTimeout(() => {
         if (currentUrl === url) {
           clearDownload();
