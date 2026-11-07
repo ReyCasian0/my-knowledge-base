@@ -50,6 +50,8 @@ button:disabled { opacity: .55; cursor: default; }
 .actions button { flex: 1; min-width: 130px; }
 .backup-reminder { border-left: 4px solid #8fc1ff; }
 .backup-reminder[data-urgent="true"] { border-left-color: #ffcb7a; }
+.original-file-panel { margin-top: 12px; padding: 0 12px 12px; border: 1px solid #425675; border-radius: 9px; }
+.original-file-panel a { display: block; color: #a9d3ff; padding: 10px 0; }
 summary { cursor: pointer; padding: 8px 0; }
 pre {
   white-space: pre-wrap; overflow-wrap: anywhere;
@@ -174,6 +176,7 @@ pre {
     <p class="muted">
       Export a separate JSON backup before making major changes.
       Keep it in Files, preferably in more than one safe location.
+      Backups include records and extracted text. Download attached originals separately.
     </p>
     <div class="actions">
       <button id="export">Export backup</button>
@@ -213,6 +216,7 @@ const loginScreen = document.getElementById("loginScreen");
 const appScreen = document.getElementById("appScreen");
 
 function showLoginScreen() {
+  revokeOriginalFileLinks();
   loginScreen.hidden = false;
   appScreen.hidden = true;
 }
@@ -246,6 +250,7 @@ function save() {
 }
 
 function render() {
+  revokeOriginalFileLinks();
   refreshBackupReminder();
   $("dashboardDocuments").textContent = records.length;
 
@@ -465,6 +470,7 @@ card.appendChild(cloudButton);
     checkCloudButton.textContent = "Check cloud status";
     checkCloudButton.addEventListener("click", () => checkRecordCloudStatus(item, checkCloudButton));
     card.appendChild(checkCloudButton);
+    card.appendChild(createOriginalFilePanel(item));
 
     
     const del = document.createElement("button");
@@ -1283,6 +1289,193 @@ async function loadDocumentsFromCloud() {
   } finally {
     button.disabled = false;
   }
+}
+
+const ORIGINAL_FILE_BUCKET = "knowledge-base-originals";
+const ORIGINAL_FILE_LIMIT = 2 * 1024 * 1024;
+const originalFileUrls = new Set();
+const ORIGINAL_FILE_TYPES = Object.freeze({
+  pdf: "application/pdf", txt: "text/plain", md: "text/markdown", csv: "text/csv", json: "application/json"
+});
+
+function revokeOriginalFileLinks() {
+  for (const url of originalFileUrls) URL.revokeObjectURL(url);
+  originalFileUrls.clear();
+}
+
+function safeOriginalFileName(name) {
+  return String(name || "").replace(/[\\/:*?"<>|\x00-\x1f\x7f]/g, "_").trim();
+}
+
+function validateOriginalFile(file) {
+  if (!file || !Number.isSafeInteger(file.size) || file.size <= 0 || file.size > ORIGINAL_FILE_LIMIT) {
+    throw new Error("Choose a nonempty original file no larger than 2 MB.");
+  }
+  const name = safeOriginalFileName(file.name);
+  const extension = name.includes(".") ? name.split(".").pop().toLowerCase() : "";
+  if (!name || name.length > 240 || !Object.hasOwn(ORIGINAL_FILE_TYPES, extension)) {
+    throw new Error("Choose a PDF, TXT, Markdown, CSV or JSON file with a filename under 241 characters.");
+  }
+  return { name, type: ORIGINAL_FILE_TYPES[extension] };
+}
+
+function originalFilePath(userId, cloudRecordId) {
+  const safeSegment = /^[A-Za-z0-9_-]+$/;
+  if (typeof userId !== "string" || !safeSegment.test(userId) || !safeSegment.test(String(cloudRecordId ?? ""))) {
+    throw new Error("Could not verify the original file's cloud record.");
+  }
+  return userId + "/" + cloudRecordId + "/original";
+}
+
+async function resolveOriginalFileTarget(record) {
+  const { data, error } = await supabaseClient.auth.getUser();
+  if (error || !data?.user) throw new Error("Sign in before using original files.");
+  const userId = data.user.id;
+  let remote;
+  try { remote = await readCloudCopyForRefresh(record, userId); }
+  catch (error) {
+    if (error.code === "NO_CLOUD_COPY") throw new Error("Save the record to Cloud before attaching or downloading its original.");
+    throw error;
+  }
+  return { userId, path: originalFilePath(userId, remote.id), bucket: supabaseClient.storage.from(ORIGINAL_FILE_BUCKET) };
+}
+
+async function checkOriginalFileSession(userId) {
+  const { data, error } = await supabaseClient.auth.getUser();
+  if (error || data?.user?.id !== userId) throw new Error("Your sign-in changed. Try again after signing in.");
+}
+
+async function uploadOriginalFile(record, file) {
+  const { name, type } = validateOriginalFile(file);
+  const target = await resolveOriginalFileTarget(record);
+  const bytes = await file.arrayBuffer();
+  if (bytes.byteLength !== file.size) throw new Error("The selected file changed. Choose it again.");
+  await checkOriginalFileSession(target.userId);
+  const { error } = await target.bucket.upload(target.path, new Blob([bytes], { type }), {
+    contentType: type, cacheControl: "0", upsert: false, metadata: { originalName: name }
+  });
+  if (error) {
+    if (String(error.statusCode) === "409" || error.code === "Duplicate" || /already exists|duplicate/i.test(error.message || "")) {
+      throw new Error("An original is already attached. The existing file was kept.");
+    }
+    throw error;
+  }
+  return name;
+}
+
+async function fetchOriginalFile(record) {
+  const target = await resolveOriginalFileTarget(record);
+  const { data: info, error: infoError } = await target.bucket.info(target.path);
+  if (infoError) {
+    if (/bucket.*not found/i.test(infoError.message || "")) throw new Error("Private original-file storage has not been set up yet.");
+    if (String(infoError.statusCode || infoError.status) === "404" || /object not found/i.test(infoError.message || "")) {
+      throw new Error("No original file is available for this record.");
+    }
+    throw infoError;
+  }
+  await checkOriginalFileSession(target.userId);
+  const { data: blob, error } = await target.bucket.download(target.path, {}, { cache: "no-store" });
+  if (error) throw error;
+  await checkOriginalFileSession(target.userId);
+  if (!(blob instanceof Blob) || blob.size <= 0 || blob.size > ORIGINAL_FILE_LIMIT) {
+    throw new Error("The attached file has an unexpected size. No download was prepared.");
+  }
+  const mime = String(info?.contentType || blob.type).split(";")[0].trim().toLowerCase();
+  const extension = Object.keys(ORIGINAL_FILE_TYPES).find(key => ORIGINAL_FILE_TYPES[key] === mime) || "bin";
+  const originalName = safeOriginalFileName(info?.userMetadata?.originalName || info?.metadata?.originalName);
+  const name = originalName && originalName.length <= 240 && originalName.toLowerCase().endsWith("." + extension)
+    ? originalName : "original-file." + extension;
+  return { name, blob };
+}
+
+function createOriginalFilePanel(record) {
+  const panel = document.createElement("details");
+  panel.className = "original-file-panel";
+  const summary = document.createElement("summary");
+  summary.textContent = "Original file";
+  const help = document.createElement("p");
+  help.className = "muted";
+  help.textContent = "Attach one original (up to 2 MB) to a cloud-saved record. It stays separate from searchable text and JSON backups. An existing attachment cannot be replaced here.";
+  const label = document.createElement("label");
+  label.textContent = "Choose an original file to attach to “" + record.title + "”";
+  const picker = document.createElement("input");
+  picker.type = "file";
+  picker.accept = ".pdf,.txt,.md,.csv,.json";
+  label.appendChild(picker);
+  const upload = document.createElement("button");
+  upload.type = "button";
+  upload.className = "secondary";
+  upload.textContent = "Attach selected file to private cloud";
+  upload.disabled = true;
+  const download = document.createElement("button");
+  download.type = "button";
+  download.className = "secondary";
+  download.textContent = "Prepare original file download";
+  const message = document.createElement("p");
+  message.setAttribute("role", "status");
+  const downloadArea = document.createElement("div");
+  let busy = false;
+  let currentUrl = null;
+  function clearDownload() {
+    if (currentUrl) {
+      URL.revokeObjectURL(currentUrl);
+      originalFileUrls.delete(currentUrl);
+    }
+    currentUrl = null;
+    downloadArea.replaceChildren();
+  }
+  function controls() {
+    picker.disabled = busy;
+    upload.disabled = busy || !picker.files?.length;
+    download.disabled = busy;
+  }
+  picker.addEventListener("change", () => {
+    controls();
+    message.textContent = picker.files?.[0] ? "Selected: " + picker.files[0].name + ". Attach to upload this file." : "";
+  });
+  upload.addEventListener("click", async () => {
+    if (busy || !picker.files?.[0]) return;
+    busy = true;
+    controls();
+    clearDownload();
+    message.textContent = "Attaching original to private cloud…";
+    try {
+      const name = await uploadOriginalFile(record, picker.files[0]);
+      picker.value = "";
+      message.textContent = "Attached: " + name + ". The document's searchable text was not changed.";
+    } catch (error) { message.textContent = "Could not attach the original: " + error.message; }
+    finally { busy = false; controls(); }
+  });
+  download.addEventListener("click", async () => {
+    if (busy) return;
+    busy = true;
+    controls();
+    clearDownload();
+    message.textContent = "Checking for an attached original…";
+    try {
+      const { name, blob } = await fetchOriginalFile(record);
+      if (!panel.isConnected || !panel.open) return;
+      const link = document.createElement("a");
+      const url = URL.createObjectURL(new Blob([blob], { type: "application/octet-stream" }));
+      currentUrl = url;
+      originalFileUrls.add(url);
+      link.href = url;
+      link.download = name;
+      link.textContent = "Download original: " + name;
+      downloadArea.appendChild(link);
+      message.textContent = "Your original is ready. Tap the download link to save it.";
+      setTimeout(() => {
+        if (currentUrl === url) {
+          clearDownload();
+          if (!busy) message.textContent = "Download link expired. Prepare it again if needed.";
+        }
+      }, 120000);
+    } catch (error) { message.textContent = "Could not prepare the original: " + error.message; }
+    finally { busy = false; controls(); }
+  });
+  panel.addEventListener("toggle", () => { if (!panel.open) clearDownload(); });
+  panel.append(summary, help, label, upload, download, message, downloadArea);
+  return panel;
 }
 
 async function checkLoginSession() {
