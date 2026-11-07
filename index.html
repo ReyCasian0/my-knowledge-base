@@ -131,6 +131,11 @@ button:disabled { opacity: .55; cursor: default; }
 .original-file-panel { margin-top: 12px; padding: 0 12px; border: 1px solid var(--line); border-radius: 9px; }
 .original-file-panel[open] { padding-bottom: 12px; }
 .original-file-panel a { display: block; padding: 10px 0; }
+.original-visual { margin: 12px 0 0; }
+.original-visual canvas, .original-visual img {
+  display: block; max-width: 100%; height: auto; margin: 8px auto 0;
+  border: 1px solid var(--line); border-radius: 8px;
+}
 summary { cursor: pointer; padding: 8px 0; }
 pre {
   white-space: pre-wrap; overflow-wrap: anywhere;
@@ -725,7 +730,7 @@ $("files").addEventListener("change", async event => {
       }
 
       const ext = file.name.split(".").pop().toLowerCase();
-      if (!Object.hasOwn(ORIGINAL_FILE_TYPES, ext)) {
+      if (!["txt", "md", "csv", "json", "pdf", "docx"].includes(ext)) {
         throw new Error(file.name + " is not supported yet. Try TXT, MD, CSV, JSON, PDF, or DOCX.");
       }
 
@@ -1434,15 +1439,14 @@ async function loadDocumentsFromCloud() {
 
 const ORIGINAL_FILE_BUCKET = "knowledge-base-originals";
 const ORIGINAL_FILE_LIMIT = 2 * 1024 * 1024;
-const originalFileUrls = new Set();
+const clearPreparedOriginals = new Set();
 const ORIGINAL_FILE_TYPES = Object.freeze({
   pdf: "application/pdf", txt: "text/plain", md: "text/markdown", csv: "text/csv", json: "application/json",
-  docx: WORD_FILE_TYPE
+  docx: WORD_FILE_TYPE, jpg: "image/jpeg", jpeg: "image/jpeg", png: "image/png", webp: "image/webp"
 });
 
 function revokeOriginalFileLinks() {
-  for (const url of originalFileUrls) URL.revokeObjectURL(url);
-  originalFileUrls.clear();
+  for (const clear of clearPreparedOriginals) clear();
 }
 
 function safeOriginalFileName(name) {
@@ -1456,7 +1460,7 @@ function validateOriginalFile(file) {
   const name = safeOriginalFileName(file.name);
   const extension = name.includes(".") ? name.split(".").pop().toLowerCase() : "";
   if (!name || name.length > 240 || !Object.hasOwn(ORIGINAL_FILE_TYPES, extension)) {
-    throw new Error("Choose a PDF, TXT, Markdown, CSV, JSON, or DOCX file with a filename under 241 characters.");
+    throw new Error("Choose a PDF, TXT, Markdown, CSV, JSON, DOCX, JPEG, PNG, or WebP file with a filename under 241 characters.");
   }
   return { name, type: ORIGINAL_FILE_TYPES[extension] };
 }
@@ -1525,9 +1529,70 @@ async function fetchOriginalFile(record) {
   const mime = String(info?.contentType || blob.type).split(";")[0].trim().toLowerCase();
   const extension = Object.keys(ORIGINAL_FILE_TYPES).find(key => ORIGINAL_FILE_TYPES[key] === mime) || "bin";
   const originalName = safeOriginalFileName(info?.userMetadata?.originalName || info?.metadata?.originalName);
-  const name = originalName && originalName.length <= 240 && originalName.toLowerCase().endsWith("." + extension)
+  const namedExtension = originalName.includes(".") ? originalName.split(".").pop().toLowerCase() : "";
+  const name = originalName && originalName.length <= 240 && ORIGINAL_FILE_TYPES[namedExtension] === mime
     ? originalName : "original-file." + extension;
   return { name, blob, type: mime };
+}
+
+function supportsImagePreview(type) {
+  return ["image/jpeg", "image/png", "image/webp"].includes(type);
+}
+
+async function createVisualPreview(blob, type, name, signal) {
+  const figure = document.createElement("figure");
+  figure.className = "original-visual";
+  const caption = document.createElement("figcaption");
+  caption.className = "muted";
+
+  if (supportsImagePreview(type)) {
+    const img = document.createElement("img");
+    const url = URL.createObjectURL(new Blob([blob], { type }));
+    const revoke = () => URL.revokeObjectURL(url);
+    signal.addEventListener("abort", revoke, { once: true });
+    try {
+      img.alt = "Attached image: " + name;
+      img.src = url;
+      await img.decode();
+    } catch (error) {
+      signal.removeEventListener("abort", revoke);
+      revoke();
+      throw error;
+    }
+    caption.textContent = name;
+    figure.append(caption, img);
+    return figure;
+  }
+
+  if (typeof pdfjsLib === "undefined") throw new Error("Reload the app to load the PDF reader.");
+  const data = new Uint8Array(await blob.arrayBuffer());
+  if (signal.aborted) throw new Error("Preview closed.");
+  const task = pdfjsLib.getDocument({ data, isEvalSupported: false, maxImageSize: 16_000_000 });
+  let cleanup;
+  const destroy = () => { cleanup ||= task.destroy().catch(() => {}); };
+  signal.addEventListener("abort", destroy, { once: true });
+  try {
+    const pdf = await task.promise;
+    const page = await pdf.getPage(1);
+    const size = page.getViewport({ scale: 1 });
+    const longestEdge = Math.max(size.width, size.height);
+    if (!Number.isFinite(longestEdge) || longestEdge <= 0) throw new Error("Invalid PDF page size.");
+    const viewport = page.getViewport({ scale: Math.min(2, 1600 / longestEdge) });
+    const canvas = document.createElement("canvas");
+    canvas.width = Math.max(1, Math.ceil(viewport.width));
+    canvas.height = Math.max(1, Math.ceil(viewport.height));
+    canvas.setAttribute("role", "img");
+    canvas.setAttribute("aria-label", "First page of " + name);
+    await page.render({ canvasContext: canvas.getContext("2d"), viewport,
+      annotationMode: pdfjsLib.AnnotationMode.DISABLE }).promise;
+    caption.textContent = "Page 1 of " + pdf.numPages + " · Download the original to see the full PDF.";
+    figure.append(caption, canvas);
+    return figure;
+  } finally {
+    signal.removeEventListener("abort", destroy);
+    destroy();
+    await cleanup;
+  }
 }
 
 function createOriginalFilePanel(record) {
@@ -1542,7 +1607,7 @@ function createOriginalFilePanel(record) {
   label.textContent = "Choose an original file to attach to “" + record.title + "”";
   const picker = document.createElement("input");
   picker.type = "file";
-  picker.accept = ".pdf,.txt,.md,.csv,.json,.docx";
+  picker.accept = Object.keys(ORIGINAL_FILE_TYPES).map(extension => "." + extension).join(",");
   label.appendChild(picker);
   const upload = document.createElement("button");
   upload.type = "button";
@@ -1558,10 +1623,13 @@ function createOriginalFilePanel(record) {
   const downloadArea = document.createElement("div");
   let busy = false;
   let currentUrl = null;
+  let preparedPreview = null;
   function clearDownload() {
+    clearPreparedOriginals.delete(clearDownload);
+    preparedPreview?.abort();
+    preparedPreview = null;
     if (currentUrl) {
       URL.revokeObjectURL(currentUrl);
-      originalFileUrls.delete(currentUrl);
     }
     currentUrl = null;
     downloadArea.replaceChildren();
@@ -1596,29 +1664,43 @@ function createOriginalFilePanel(record) {
     message.textContent = "Checking for an attached original…";
     try {
       const { name, blob, type } = await fetchOriginalFile(record);
-      if (!panel.isConnected || !panel.open) return;
+      if (!panel.isConnected || !panel.open || appScreen.hidden) return;
       const link = document.createElement("a");
       const url = URL.createObjectURL(new Blob([blob], { type: "application/octet-stream" }));
       currentUrl = url;
-      originalFileUrls.add(url);
+      preparedPreview = new AbortController();
+      const { signal } = preparedPreview;
+      clearPreparedOriginals.add(clearDownload);
       link.href = url;
       link.download = name;
       link.textContent = "Download original: " + name;
       downloadArea.appendChild(link);
       message.textContent = "Your original is ready. Tap the download link to save it.";
-      if (type === WORD_FILE_TYPE || type.startsWith("text/") || type === "application/json") {
+      const visual = type === "application/pdf" || supportsImagePreview(type);
+      if (visual || type === WORD_FILE_TYPE || type.startsWith("text/") || type === "application/json") {
         const previewButton = document.createElement("button");
         previewButton.type = "button";
         previewButton.className = "secondary";
-        previewButton.textContent = "Preview original text";
+        previewButton.textContent = visual
+          ? (type === "application/pdf" ? "Preview first PDF page" : "Preview image")
+          : "Preview original text";
         previewButton.addEventListener("click", async () => {
           previewButton.disabled = true;
-          const preview = document.createElement("pre");
+          previewButton.textContent = "Preparing preview…";
+          let preview;
           try {
-            const text = type === WORD_FILE_TYPE ? await readWordText(blob, name) : await blob.text();
-            preview.textContent = textPreview(text) || "This file has no text to preview.";
-          } catch (error) { preview.textContent = "Could not preview this file: " + error.message; }
-          previewButton.replaceWith(preview);
+            if (visual) {
+              preview = await createVisualPreview(blob, type, name, signal);
+            } else {
+              const text = type === WORD_FILE_TYPE ? await readWordText(blob, name) : await blob.text();
+              preview = document.createElement("pre");
+              preview.textContent = textPreview(text) || "This file has no text to preview.";
+            }
+          } catch (error) {
+            preview = document.createElement("p");
+            preview.textContent = "Could not preview this file: " + error.message;
+          }
+          if (!signal.aborted) previewButton.replaceWith(preview);
         });
         downloadArea.appendChild(previewButton);
       }
