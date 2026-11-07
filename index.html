@@ -13,51 +13,133 @@
 <link rel="apple-touch-icon" sizes="180x180" href="./assets/apple-touch-icon.png">
 <script defer src="https://cdn.jsdelivr.net/npm/@zip.js/zip.js@2.8.17/dist/zip.min.js"
   integrity="sha384-vbmgf7WpK+JtRryAgb0jiM2HhxG+bOJXunO/H+mElJ3mHYwiPRWYUd5FsYJEZokm" crossorigin="anonymous"></script>
+<script>
+const themeKey = "myKnowledgeBaseTheme";
+function applyTheme(theme) {
+  const light = theme === "light";
+  document.documentElement.dataset.theme = light ? "light" : "dark";
+  document.querySelector('meta[name="theme-color"]').content = light ? "#eef2f8" : "#0b1220";
+}
+try { applyTheme(localStorage.getItem(themeKey)); } catch (error) { }
+</script>
 <style>
 * { box-sizing: border-box; }
+:root {
+  color-scheme: dark;
+  --page: #0b1220;
+  --surface: #152238;
+  --inset: #101a2b;
+  --text: #edf4ff;
+  --muted: #b2c1d6;
+  --line: #304663;
+  --control-line: #647e9f;
+  --accent: #9cc9ff;
+  --primary: #1d5dc4;
+  --secondary: #30425b;
+  --success: #8ee6b0;
+  --error: #ffadad;
+  --warning: #ffcb7a;
+}
+:root[data-theme="light"] {
+  color-scheme: light;
+  --page: #eef2f8;
+  --surface: #fff;
+  --inset: #f3f6fc;
+  --text: #172a44;
+  --muted: #4e6077;
+  --line: #cbd6e5;
+  --control-line: #778ba5;
+  --accent: #174fa3;
+  --primary: #1d5dc4;
+  --secondary: #364c67;
+  --success: #136035;
+  --error: #a12c36;
+  --warning: #995b0b;
+}
 body {
-  margin: 0; padding: 20px;
-  background: #0b1220; color: #edf4ff;
-  font-family: -apple-system, BlinkMacSystemFont, sans-serif;
+  margin: 0; padding: clamp(12px, 3vw, 32px);
+  background: var(--page); color: var(--text);
+  font: 1rem/1.5 system-ui, sans-serif;
 }
-main { max-width: 900px; margin: auto; }
-.muted { color: #a8b8ce; }
+main { max-width: 1040px; margin: auto; }
+#loginScreen { max-width: 440px; margin: 6vh auto; }
+h1, h2, h3 { line-height: 1.2; margin: 0; }
+h1 { font-size: clamp(1.65rem, 4vw, 2.4rem); }
+h2 { font-size: 1.2rem; }
+p { margin: .55rem 0; }
+a { color: var(--accent); }
+:focus-visible { outline: 3px solid var(--accent); outline-offset: 3px; }
+.muted { color: var(--muted); }
+.library-header, .brand, .header-controls, .library-nav, .library-totals {
+  display: flex; align-items: center; gap: 12px; flex-wrap: wrap;
+}
+.library-header { justify-content: space-between; gap: 18px; }
+.brand { flex-wrap: nowrap; }
+.brand img { width: 44px; height: 44px; }
+.brand p { margin-bottom: 0; }
+.header-controls select, .header-controls button, .library-tools button {
+  width: auto; margin: 0;
+}
+.library-nav { margin-top: 14px; }
+.library-nav a { padding: 7px 0; margin-right: 10px; font-weight: 600; }
+.library-totals { font-size: .9rem; color: var(--muted); margin-top: 12px; }
+.library-totals strong { color: var(--text); }
+.library-tools { border-top: 1px solid var(--line); margin-top: 14px; padding-top: 12px; }
+.library-tools p { font-size: .9rem; }
+.search-controls {
+  display: grid; grid-template-columns: minmax(0, 2fr) minmax(0, 1fr); gap: 12px;
+}
 .panel {
-  background: #152238; border: 1px solid #2b405e;
-  border-radius: 14px; padding: 18px; margin-top: 16px;
+  background: var(--surface); border: 1px solid var(--line);
+  border-radius: 16px; padding: clamp(14px, 3vw, 24px); margin-top: 16px;
 }
-input, textarea, button {
-  width: 100%; padding: 12px; margin-top: 8px;
+input, textarea, select, button {
+  width: 100%; min-height: 44px; padding: 10px 12px; margin-top: 6px;
   border-radius: 9px; font: inherit;
 }
-input, textarea {
-  color: white; background: #0b1220;
-  border: 1px solid #425675;
+input, textarea, select {
+  color: var(--text); background: var(--inset);
+  border: 1px solid var(--control-line);
 }
+input::placeholder, textarea::placeholder { color: var(--muted); opacity: 1; }
 button {
-  background: #2878ee; color: white;
+  background: var(--primary); color: white;
   border: 0; font-weight: 600; cursor: pointer;
 }
-.secondary { background: #30425b; }
+.secondary { background: var(--secondary); }
 .danger { background: #873b4b; }
 .file {
-  padding: 14px 0; border-bottom: 1px solid #30425b;
-  overflow-wrap: anywhere;
+  padding: 16px; border: 1px solid var(--line); border-radius: 12px;
+  margin-top: 12px; overflow-wrap: anywhere;
 }
-.tag { color: #8fc1ff; font-size: 13px; }
-.status { color: #8ee6b0; }
-.cloud-status { border-left: 3px solid #8fc1ff; padding: 8px 12px; background: #0b1220; }
+.file:target { outline: 2px solid var(--accent); outline-offset: 3px; }
+.file-actions { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 210px), 1fr)); gap: 8px; margin: 10px 0; }
+.file-actions button { margin: 0; }
+.recent-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 240px), 1fr)); gap: 8px; margin-top: 12px; }
+.recent-card { background: var(--inset); border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px; overflow-wrap: anywhere; }
+.recent-card a { display: block; font-weight: 650; }
+.recent-card p { margin: .2rem 0 0; font-size: .85rem; }
+.tag { color: var(--accent); font-size: .85rem; }
+.status { color: var(--success); }
+.status[data-error="true"] { color: var(--error); }
+.cloud-status { border-left: 3px solid var(--accent); padding: 8px 12px; background: var(--inset); }
 button:disabled { opacity: .55; cursor: default; }
 .actions { display: flex; gap: 8px; flex-wrap: wrap; }
 .actions button { flex: 1; min-width: 130px; }
-.backup-reminder { border-left: 4px solid #8fc1ff; }
-.backup-reminder[data-urgent="true"] { border-left-color: #ffcb7a; }
-.original-file-panel { margin-top: 12px; padding: 0 12px 12px; border: 1px solid #425675; border-radius: 9px; }
-.original-file-panel a { display: block; color: #a9d3ff; padding: 10px 0; }
+.backup-reminder { border-left: 4px solid var(--accent); padding-left: 12px; margin: 12px 0; }
+.backup-reminder[data-urgent="true"] { border-left-color: var(--warning); }
+.original-file-panel { margin-top: 12px; padding: 0 12px; border: 1px solid var(--line); border-radius: 9px; }
+.original-file-panel[open] { padding-bottom: 12px; }
+.original-file-panel a { display: block; padding: 10px 0; }
 summary { cursor: pointer; padding: 8px 0; }
 pre {
   white-space: pre-wrap; overflow-wrap: anywhere;
-  color: #c6d7ee; font: inherit; font-size: 14px;
+  color: var(--text); background: var(--inset); border-radius: 9px; padding: 12px;
+  font: inherit; font-size: .9rem;
+}
+@media (max-width: 520px) {
+  .search-controls { grid-template-columns: minmax(0, 1fr); }
+  .file { padding: 12px; }
 }
 </style>
 </head>
@@ -79,49 +161,80 @@ pre {
   <p id="loginMessage" role="status"></p>
 </section>
 <main id="appScreen" hidden>
-  <h1>My Knowledge Base</h1>
-<button type="button" id="signOutButton" onclick="signOut()">Sign Out</button>
-  <p class="muted">Your personal, local-first document library</p>
-  <p id="status" class="status">Starting database...</p>
-  <button type="button" id="loadFromCloud" onclick="loadDocumentsFromCloud()">Load from Cloud</button>
-  <p class="muted">Add missing cloud documents to this browser. Existing local records and edits are kept unchanged.</p>
-  <section class="panel backup-reminder" id="backupReminder" aria-labelledby="backupReminderTitle">
-    <h2 id="backupReminderTitle">Your backup</h2>
-    <p id="backupReminderText" role="status">Checking this device's backup history…</p>
-    <button type="button" class="secondary" onclick="document.getElementById('export').click()">Export a dated backup</button>
-    <p class="muted">Export downloads a separate copy. Keep it in Files or Downloads; cloud storage is not a separate backup.</p>
-  </section>
-  <section class="panel">
-  <h2>Dashboard Overview</h2>
-  <div class="dashboard-grid">
-    <div class="dashboard-card">
-      <h3>Total Documents</h3>
-      <p id="dashboardDocuments">0</p>
+  <header class="panel">
+    <div class="library-header">
+      <div class="brand">
+        <img src="./assets/icon-192.png" alt="">
+        <div>
+          <h1>My Knowledge Base</h1>
+          <p class="muted">Your personal document library</p>
+        </div>
+      </div>
+      <div class="header-controls">
+        <label for="theme">Theme</label>
+        <select id="theme">
+          <option value="dark">Dark</option>
+          <option value="light">Light</option>
+        </select>
+        <button type="button" class="secondary" id="signOutButton" onclick="signOut()">Sign Out</button>
+      </div>
     </div>
-    <div class="dashboard-card">
-      <h3>Categories</h3>
-      <p id="dashboardCategories">0</p>
+    <nav class="library-nav" aria-label="Library shortcuts">
+      <a href="#librarySearch">Search</a>
+      <a href="#importDocuments">Import files</a>
+      <a href="#addDocument">Add record</a>
+      <a href="#backupTools">Backups</a>
+    </nav>
+    <div class="library-totals">
+      <span><strong id="dashboardDocuments">0</strong> documents</span>
+      <span><strong id="dashboardCategories">0</strong> categories</span>
     </div>
-    <div class="dashboard-card">
-      <h3>Welcome</h3>
-      <p>Your personal knowledge library</p>
+    <div class="library-tools">
+      <button type="button" id="loadFromCloud" onclick="loadDocumentsFromCloud()">Load from Cloud</button>
+      <p class="muted">Add missing cloud documents to this browser while keeping existing records and edits.</p>
+      <p id="status" class="status" role="status">Starting database...</p>
     </div>
-  </div>
-</section>
-  
-<section class="panel">
-  <h2>Recent Documents</h2>
-  <p class="muted">Your 5 most recently saved records.</p>
-  <div id="recentDocuments" class="dashboard-grid"></div>
-</section>
+  </header>
 
-
-  <section class="panel">
+  <section class="panel" id="librarySearch">
     <h2>Search everything</h2>
-    <input id="search" placeholder="Search names, tags, notes, or text...">
+    <div class="search-controls">
+      <div>
+        <label for="search">Find a document</label>
+        <input id="search" type="search" placeholder="Search names, tags, notes, or text…">
+      </div>
+      <div>
+        <label for="categoryFilter">Show category</label>
+        <select id="categoryFilter">
+          <option value="All">All categories</option>
+          <option value="Cybersecurity">Cybersecurity</option>
+          <option value="Computer Inventory">Computer Inventory</option>
+          <option value="Digital Forensics">Digital Forensics</option>
+          <option value="Class Notes">Class Notes</option>
+          <option value="Personal">Personal</option>
+          <option value="Uncategorized">Uncategorized</option>
+        </select>
+      </div>
+    </div>
+  </section>
+
+  <section class="panel" id="recentSection">
+    <h2>Recent documents</h2>
+    <div id="recentDocuments" class="recent-grid"></div>
   </section>
 
   <section class="panel">
+    <h2>My documents</h2>
+    <p id="count" class="muted" role="status">0 documents</p>
+    <details>
+      <summary>How cloud actions work</summary>
+      <p class="muted">Save to Cloud creates the first cloud copy. Update Cloud sends this device's edits. Refresh from Cloud brings cloud edits onto this device. Both directions ask before replacing saved fields.</p>
+      <p class="muted">Cloud status describes the editable title, category, tags and notes at the last check. Use Check cloud status for a fresh comparison.</p>
+    </details>
+    <div id="list"></div>
+  </section>
+
+  <section class="panel" id="addDocument">
     <h2>Add a document record</h2>
     <input id="title" placeholder="Document name">
     <input id="tags" placeholder="Tags, separated by commas">
@@ -129,7 +242,7 @@ pre {
     <button id="add">Add record</button>
   </section>
 
-  <section class="panel">
+  <section class="panel" id="importDocuments">
     <h2>Import text documents</h2>
     <p class="muted">
       Select TXT, Markdown, CSV, JSON, PDF, or Word (.docx) files.
@@ -153,35 +266,18 @@ pre {
     <p class="muted">PDFs need selectable text. Word import reads the main document text, including tables. Scans and pictures need text recognition first. If a selected file fails, the whole selection is skipped.</p>
   </section>
 
-  <section class="panel">
-    <h2>My documents</h2>
-    <p class="muted">Save to Cloud creates the first cloud copy. Update Cloud sends this device's edits. Refresh from Cloud brings cloud edits onto this device. Both directions ask before replacing saved fields.</p>
-    <p class="muted">Cloud status describes the editable title, category, tags and notes at the last check. It is not automatic syncing. Use Check cloud status for a fresh comparison.</p>
-    
-<label for="categoryFilter">Show category</label>
-<select id="categoryFilter">
-  <option value="All">All categories</option>
-  <option value="Cybersecurity">Cybersecurity</option>
-  <option value="Computer Inventory">Computer Inventory</option>
-  <option value="Digital Forensics">Digital Forensics</option>
-  <option value="Class Notes">Class Notes</option>
-  <option value="Personal">Personal</option>
-  <option value="Uncategorized">Uncategorized</option>
-</select>
-
-    <p id="count" class="muted">0 documents</p>
-    <div id="list"></div>
-  </section>
-
-  <section class="panel">
+  <section class="panel" id="backupTools">
     <h2>Backup and restore</h2>
+    <div class="backup-reminder" id="backupReminder">
+      <p id="backupReminderText" role="status">Checking this device's backup history…</p>
+    </div>
     <p class="muted">
       Export a separate JSON backup before making major changes.
       Keep it in Files, preferably in more than one safe location.
       Backups include records and extracted text. Download attached originals separately.
     </p>
     <div class="actions">
-      <button id="export">Export backup</button>
+      <button id="export">Export dated backup</button>
       <button id="restoreButton" class="secondary">Restore backup</button>
     </div>
     <input id="backupFile" type="file" accept=".json,application/json" hidden>
@@ -230,10 +326,16 @@ function showAppScreen() {
   
 const $ = id => document.getElementById(id);
 const status = $("status");
+const themeSelect = $("theme");
+themeSelect.value = document.documentElement.dataset.theme || "dark";
+themeSelect.addEventListener("change", () => {
+  applyTheme(themeSelect.value);
+  try { localStorage.setItem(themeKey, themeSelect.value); } catch (error) { }
+});
 
 function setStatus(message, good = true) {
   status.textContent = message;
-  status.style.color = good ? "#8ee6b0" : "#ffadad";
+  status.dataset.error = String(!good);
 }
 
 function save() {
@@ -256,81 +358,56 @@ function render() {
   refreshBackupReminder();
   $("dashboardDocuments").textContent = records.length;
 
-const categoryNames = new Set(
-  records.map(item => item.category || "Uncategorized")
-);
-
-$("dashboardCategories").textContent = categoryNames.size;
-  
-const recentDocuments = [...records]
-  .sort((a, b) => {
-    return new Date(b.created || 0) - new Date(a.created || 0);
-  })
-  .slice(0, 5);
-
-const recentList = $("recentDocuments");
-recentList.replaceChildren();
-
-if (recentDocuments.length === 0) {
-  const message = document.createElement("p");
-  message.className = "muted";
-  message.textContent = "No documents saved yet.";
-  recentList.appendChild(message);
-} else {
-  recentDocuments.forEach(item => {
-    const card = document.createElement("div");
-    card.className = "dashboard-card";
-
-    const title = document.createElement("h3");
-    title.textContent = item.title || "Untitled document";
-    card.appendChild(title);
-
-    const details = document.createElement("p");
-    details.className = "muted";
-    details.textContent =
-      (item.category || "Uncategorized") +
-      " · " +
-      (item.created
-        ? new Date(item.created).toLocaleString()
-        : "Date unknown");
-    card.appendChild(details);
-
-    if (item.notes) {
-      const notes = document.createElement("p");
-      notes.textContent = item.notes;
-      card.appendChild(notes);
-    }
-
-    recentList.appendChild(card);
-  });
-}
+  const categoryNames = new Set(records.map(item => item.category || "Uncategorized"));
+  $("dashboardCategories").textContent = categoryNames.size;
 
   const query = $("search").value.toLowerCase().trim();
-  
-const selectedCategory = $("categoryFilter").value;
+  const selectedCategory = $("categoryFilter").value;
+  const filtering = Boolean(query) || selectedCategory !== "All";
+  const recentTargets = new Map();
+  $("recentSection").hidden = filtering;
 
-const matches = records.filter(item => {
-  const itemCategory = item.category || "Uncategorized";
-  
+  if (!filtering) {
+    const recent = [...records]
+      .sort((a, b) => new Date(b.created || 0) - new Date(a.created || 0))
+      .slice(0, 5);
+    const recentList = $("recentDocuments");
+    recentList.replaceChildren();
+    if (!recent.length) {
+      const message = document.createElement("p");
+      message.className = "muted";
+      message.textContent = "No documents saved yet.";
+      recentList.appendChild(message);
+    }
 
-  const categoryMatches =
-    selectedCategory === "All" ||
-    itemCategory === selectedCategory;
+    recent.forEach((item, index) => {
+      const target = "recent-record-" + (index + 1);
+      recentTargets.set(item, target);
+      const card = document.createElement("div");
+      card.className = "recent-card";
+      const title = document.createElement("a");
+      title.href = "#" + target;
+      title.textContent = item.title || "Untitled document";
+      const details = document.createElement("p");
+      details.className = "muted";
+      const date = item.created ? new Date(item.created).toLocaleDateString() : "Date unknown";
+      details.textContent = (item.category || "Uncategorized") + " · " + date;
+      card.append(title, details);
+      recentList.appendChild(card);
+    });
+  }
 
-  const searchMatches = [
-    item.title,
-    item.tags,
-    item.notes,
-    item.content,
-    itemCategory
-  ].join(" ").toLowerCase().includes(query);
+  const matches = records.filter(item => {
+    const itemCategory = item.category || "Uncategorized";
+    const categoryMatches = selectedCategory === "All" || itemCategory === selectedCategory;
+    const searchMatches = [item.title, item.tags, item.notes, item.content, itemCategory]
+      .join(" ").toLowerCase().includes(query);
+    return categoryMatches && searchMatches;
+  });
 
-  return categoryMatches && searchMatches;
-});
-
-
-  $("count").textContent =
-    records.length + (records.length === 1 ? " document" : " documents");
+  $("count").textContent = filtering
+    ? matches.length + " of " + records.length + " documents"
+    : records.length + (records.length === 1 ? " document" : " documents");
 
   const list = $("list");
   list.replaceChildren();
@@ -348,8 +425,12 @@ const matches = records.filter(item => {
   matches.forEach(item => {
     const card = document.createElement("article");
     card.className = "file";
+    if (recentTargets.has(item)) {
+      card.id = recentTargets.get(item);
+      card.tabIndex = -1;
+    }
 
-    const heading = document.createElement("strong");
+    const heading = document.createElement("h3");
     heading.textContent = item.title;
     card.appendChild(heading);
 
@@ -377,6 +458,9 @@ const matches = records.filter(item => {
       preview.append(summary, text);
       card.appendChild(preview);
     }
+    const cardActions = document.createElement("div");
+    cardActions.className = "file-actions";
+    card.appendChild(cardActions);
     const editButton = document.createElement("button");
     editButton.type = "button";
     editButton.textContent = "Edit Record";
@@ -442,36 +526,34 @@ const matches = records.filter(item => {
       });
 
       editButton.disabled = true;
-      card.appendChild(form);
+      cardActions.after(form);
       fields.title.focus();
     });
-    card.appendChild(editButton);
+    cardActions.appendChild(editButton);
 
-const cloudButton = document.createElement("button");
-cloudButton.type = "button";
-cloudButton.textContent = "Save to Cloud — first copy";
-cloudButton.addEventListener("click", () => {
-  saveRecordToCloud(item, cloudButton);
-});
-card.appendChild(cloudButton);
+    const cloudButton = document.createElement("button");
+    cloudButton.type = "button";
+    cloudButton.textContent = "Save to Cloud — first copy";
+    cloudButton.addEventListener("click", () => saveRecordToCloud(item, cloudButton));
+    cardActions.appendChild(cloudButton);
     const updateCloudButton = document.createElement("button");
     updateCloudButton.type = "button";
     updateCloudButton.className = "secondary";
     updateCloudButton.textContent = "Update Cloud — send edits";
     updateCloudButton.addEventListener("click", () => updateRecordInCloud(item, updateCloudButton));
-    card.appendChild(updateCloudButton);
+    cardActions.appendChild(updateCloudButton);
     const refreshCloudButton = document.createElement("button");
     refreshCloudButton.type = "button";
     refreshCloudButton.className = "secondary";
     refreshCloudButton.textContent = "Refresh from Cloud — receive edits";
     refreshCloudButton.addEventListener("click", () => refreshRecordFromCloud(item, refreshCloudButton));
-    card.appendChild(refreshCloudButton);
+    cardActions.appendChild(refreshCloudButton);
     const checkCloudButton = document.createElement("button");
     checkCloudButton.type = "button";
     checkCloudButton.className = "secondary";
     checkCloudButton.textContent = "Check cloud status";
     checkCloudButton.addEventListener("click", () => checkRecordCloudStatus(item, checkCloudButton));
-    card.appendChild(checkCloudButton);
+    cardActions.appendChild(checkCloudButton);
     card.appendChild(createOriginalFilePanel(item));
 
     
