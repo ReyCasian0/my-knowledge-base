@@ -190,6 +190,7 @@ pre {
       <a href="#librarySearch">Search</a>
       <a href="#importDocuments">Import files</a>
       <a href="#addDocument">Add record</a>
+      <a href="#offlineTools">Offline</a>
       <a href="#backupTools">Backups</a>
     </nav>
     <div class="library-totals">
@@ -278,6 +279,25 @@ pre {
     <p class="muted">Each file can be up to 2 MB. If one file fails, the whole selection is skipped.</p>
   </section>
 
+  <section class="panel" id="offlineTools">
+    <h2>Offline library</h2>
+    <p class="muted">Save an encrypted, read-only copy of this browser's records and searchable text. Attachments stay in the cloud. The copy stays on this device until you remove it, even after signing out.</p>
+    <p><a href="./offline.html">Open offline reader</a></p>
+    <details>
+      <summary>Save or refresh an offline copy</summary>
+      <form id="saveOfflineCopy">
+        <p class="muted">Use a separate passphrase of at least 10 characters. Saving replaces this browser's previous offline copy.</p>
+        <label for="offlinePassphrase">Offline passphrase</label>
+        <input id="offlinePassphrase" type="password" minlength="10" autocomplete="new-password" required>
+        <label for="offlineConfirm">Confirm offline passphrase</label>
+        <input id="offlineConfirm" type="password" minlength="10" autocomplete="new-password" required>
+        <button type="submit">Save offline copy</button>
+        <button type="button" id="removeOfflineCopy" class="secondary">Remove offline copy</button>
+      </form>
+    </details>
+    <p id="offlineMessage" role="status"></p>
+  </section>
+
   <section class="panel" id="backupTools">
     <h2>Backup and restore</h2>
     <div class="backup-reminder" id="backupReminder">
@@ -306,6 +326,7 @@ pre {
 </main>
 
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script src="./offline-library.js"></script>
 <script>
 const KEY = "myKnowledgeBaseRecordsV1";
   
@@ -343,6 +364,55 @@ themeSelect.value = document.documentElement.dataset.theme || "dark";
 themeSelect.addEventListener("change", () => {
   applyTheme(themeSelect.value);
   try { localStorage.setItem(themeKey, themeSelect.value); } catch (error) { }
+});
+
+const offlineForm = $("saveOfflineCopy");
+const removeOffline = $("removeOfflineCopy");
+offlineForm.addEventListener("submit", async event => {
+  event.preventDefault();
+  const message = $("offlineMessage");
+  const passphrase = $("offlinePassphrase").value;
+  if (passphrase.length < 10 || passphrase !== $("offlineConfirm").value) {
+    message.textContent = "Enter the same passphrase of at least 10 characters in both boxes.";
+    return;
+  }
+  if (!ready || !cloudUserId || appScreen.hidden || !navigator.serviceWorker || !crypto.subtle || !globalThis.indexedDB || typeof offlineLibrary === "undefined") {
+    message.textContent = "Open the live library online in a browser that supports offline storage, then try again.";
+    return;
+  }
+  const button = offlineForm.querySelector('[type="submit"]');
+  const account = cloudUserId;
+  const snapshot = records.slice();
+  button.disabled = removeOffline.disabled = true;
+  offlineForm.reset();
+  message.textContent = "Preparing the offline reader…";
+  let timer;
+  try {
+    await navigator.serviceWorker.register("./offline-worker.js");
+    await Promise.race([navigator.serviceWorker.ready, new Promise((_, reject) => {
+      timer = setTimeout(() => reject(new Error("The offline reader took too long to install.")), 15000);
+    })]);
+    if (cloudUserId !== account || appScreen.hidden) throw new Error("Sign in again to save an offline copy.");
+    await offlineLibrary.save(snapshot, passphrase);
+    message.textContent = "Offline copy ready. Open the offline reader and enter your passphrase to check it.";
+  } catch (error) {
+    message.textContent = "Could not save the offline copy. " + (error.message || "Check your browser storage and internet connection.");
+  } finally {
+    clearTimeout(timer);
+    button.disabled = removeOffline.disabled = false;
+  }
+});
+removeOffline.addEventListener("click", async () => {
+  if (!confirm("Remove this browser's offline copy? Your online library and cloud records will still be available.")) return;
+  const button = offlineForm.querySelector('[type="submit"]');
+  button.disabled = removeOffline.disabled = true;
+  try {
+    await offlineLibrary.remove();
+    offlineForm.reset();
+    $("offlineMessage").textContent = "Offline copy removed from this browser.";
+  } catch {
+    $("offlineMessage").textContent = "Could not remove the offline copy. Try again.";
+  } finally { button.disabled = removeOffline.disabled = false; }
 });
 
 function setStatus(message, good = true) {

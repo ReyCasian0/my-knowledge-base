@@ -1,0 +1,109 @@
+<!doctype html>
+<html lang="en">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="theme-color" content="#0b1220">
+<title>Knowledge Base · Offline reader</title>
+<style>
+  :root { color-scheme: dark; }
+  * { box-sizing: border-box; }
+  body { margin: 0; padding: 20px; background: #0b1220; color: #edf4ff; font: 1rem/1.5 system-ui, sans-serif; }
+  main { max-width: 800px; margin: auto; }
+  a { color: #9cc9ff; }
+  form, article { background: #152238; border: 1px solid #304663; border-radius: 12px; padding: 16px; margin: 16px 0; }
+  input, button { font: inherit; min-height: 44px; border-radius: 8px; padding: 8px 12px; margin-top: 6px; }
+  input { width: 100%; background: #101a2b; border: 1px solid #647e9f; color: inherit; }
+  button { background: #1d5dc4; color: white; border: 0; cursor: pointer; }
+  h2 { font-size: 1.15rem; margin: 0; overflow-wrap: anywhere; }
+  p, pre { overflow-wrap: anywhere; white-space: pre-wrap; font: inherit; }
+</style>
+<main>
+  <h1>Knowledge Base · Offline reader</h1>
+  <p>Read and search an offline copy saved in this browser. To edit or use the cloud, reopen the library when you have internet.</p>
+  <p><a href="./">Return to the online library</a></p>
+  <form id="unlock">
+    <label for="passphrase">Offline passphrase</label>
+    <input id="passphrase" type="password" required autocomplete="off">
+    <button type="submit">Unlock offline copy</button>
+    <p id="unlockMessage" role="status"></p>
+  </form>
+  <section id="reader" hidden>
+    <p id="savedAt"></p>
+    <button id="lock" type="button">Lock offline copy</button>
+    <p><label for="search">Search offline records</label>
+      <input id="search" type="search" placeholder="Search titles, notes, or text"></p>
+    <p id="count" role="status"></p>
+    <div id="results"></div>
+  </section>
+</main>
+<script src="./offline-library.js"></script>
+<script>
+  const $ = id => document.getElementById(id);
+  let records = [];
+  let unlockAttempt = 0;
+  function render() {
+    const query = $("search").value.trim().toLowerCase();
+    const matches = records.filter(record => [record.title, record.category, record.tags, record.notes, record.content]
+      .join(" ").toLowerCase().includes(query));
+    $("count").textContent = matches.length + " of " + records.length + " records";
+    const cards = matches.map(record => {
+      const card = document.createElement("article");
+      const title = document.createElement("h2");
+      title.textContent = record.title;
+      const notes = document.createElement("p");
+      notes.textContent = record.notes || "";
+      card.append(title, notes);
+      if (record.content) {
+        const detail = document.createElement("details");
+        const summary = document.createElement("summary");
+        summary.textContent = "Read saved text";
+        const text = document.createElement("pre");
+        text.textContent = record.content;
+        detail.append(summary, text);
+        card.appendChild(detail);
+      }
+      return card;
+    });
+    $("results").replaceChildren(...cards);
+  }
+  $("unlock").addEventListener("submit", async event => {
+    event.preventDefault();
+    const form = event.currentTarget;
+    const button = form.querySelector("button");
+    const attempt = ++unlockAttempt;
+    button.disabled = true;
+    $("unlockMessage").textContent = "Unlocking…";
+    try {
+      const copy = await offlineLibrary.read($("passphrase").value);
+      if (attempt !== unlockAttempt) return;
+      records = copy.records;
+      $("savedAt").textContent = "Copy saved " + new Date(copy.savedAt).toLocaleString();
+      render();
+      form.hidden = true;
+      $("reader").hidden = false;
+      $("search").focus();
+      $("unlockMessage").textContent = "";
+    } catch (error) {
+      $("unlockMessage").textContent = error.message || "Could not read this offline copy.";
+    } finally {
+      form.reset();
+      button.disabled = false;
+    }
+  });
+  $("search").addEventListener("input", render);
+  function lock() {
+    unlockAttempt++;
+    records = [];
+    $("results").replaceChildren();
+    $("search").value = "";
+    $("savedAt").textContent = "";
+    $("count").textContent = "";
+    $("unlock").reset();
+    $("unlockMessage").textContent = "";
+    $("reader").hidden = true;
+    $("unlock").hidden = false;
+  }
+  $("lock").addEventListener("click", () => { lock(); $("passphrase").focus(); });
+  addEventListener("pagehide", lock);
+</script>
+</html>
