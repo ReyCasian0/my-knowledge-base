@@ -282,7 +282,7 @@ pre {
   <section class="panel" id="offlineTools">
     <h2>Offline library</h2>
     <p class="muted">Save an encrypted, read-only copy of this browser's records and searchable text. Attachments stay in the cloud. The copy stays on this device until you remove it, even after signing out.</p>
-    <p><a href="./offline.html">Open offline reader</a></p>
+    <p><a href="./offline">Open offline reader</a></p>
     <details>
       <summary>Save or refresh an offline copy</summary>
       <form id="saveOfflineCopy">
@@ -386,22 +386,48 @@ offlineForm.addEventListener("submit", async event => {
   button.disabled = removeOffline.disabled = true;
   offlineForm.reset();
   message.textContent = "Preparing the offline reader…";
-  let timer;
   try {
-    await navigator.serviceWorker.register("./offline-worker.js");
-    await Promise.race([navigator.serviceWorker.ready, new Promise((_, reject) => {
-      timer = setTimeout(() => reject(new Error("The offline reader took too long to install.")), 15000);
-    })]);
+    const registration = await navigator.serviceWorker.register("./offline-worker.js", { updateViaCache: "none" });
+    if (registration.active) await registration.update();
+    await waitForOfflineReader();
     if (cloudUserId !== account || appScreen.hidden) throw new Error("Sign in again to save an offline copy.");
     await offlineLibrary.save(snapshot, passphrase);
-    message.textContent = "Offline copy ready. Open the offline reader and enter your passphrase to check it.";
+    message.textContent = "Offline copy ready in this browser. Open the offline reader and enter your passphrase to check it.";
   } catch (error) {
     message.textContent = "Could not save the offline copy. " + (error.message || "Check your browser storage and internet connection.");
   } finally {
-    clearTimeout(timer);
     button.disabled = removeOffline.disabled = false;
   }
 });
+
+function waitForOfflineReader() {
+  const serviceWorker = navigator.serviceWorker;
+  return new Promise((resolve, reject) => {
+    let channel;
+    const timer = setTimeout(() => {
+      cleanUp();
+      reject(new Error("The offline reader could not finish installing. Keep this app open online and try again."));
+    }, 15000);
+    function cleanUp() {
+      clearTimeout(timer);
+      channel?.port1.close();
+      serviceWorker.removeEventListener("controllerchange", check);
+    }
+    function check() {
+      if (!serviceWorker.controller) return;
+      channel?.port1.close();
+      channel = new MessageChannel();
+      channel.port1.onmessage = event => {
+        if (event.data !== true) return;
+        cleanUp();
+        resolve();
+      };
+      serviceWorker.controller.postMessage("check-offline-reader-v2", [channel.port2]);
+    }
+    serviceWorker.addEventListener("controllerchange", check);
+    check();
+  });
+}
 removeOffline.addEventListener("click", async () => {
   if (!confirm("Remove this browser's offline copy? Your online library and cloud records will still be available.")) return;
   const button = offlineForm.querySelector('[type="submit"]');
