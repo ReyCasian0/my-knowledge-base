@@ -102,6 +102,8 @@ input, textarea, select {
   border: 1px solid var(--control-line);
 }
 input::placeholder, textarea::placeholder { color: var(--muted); opacity: 1; }
+.scan-option { display: flex; align-items: center; gap: 10px; margin-top: 12px; }
+.scan-option input { width: 20px; min-height: 20px; margin: 0; }
 button {
   background: var(--primary); color: white;
   border: 0; font-weight: 600; cursor: pointer;
@@ -265,10 +267,15 @@ pre {
   <option value="Uncategorized">Uncategorized</option>
 </select>
 
+    <label class="scan-option">
+      <input id="recognizeScans" type="checkbox" aria-describedby="scanHelp">
+      Recognize text in scanned PDFs (English)
+    </label>
+    <p id="scanHelp" class="muted">Reads up to 10 scanned pages per PDF in this browser. The first scan needs internet to load the reader.</p>
  <input id="files" type="file" multiple
   accept=".txt,.md,.csv,.json,.pdf,.docx,text/plain,text/markdown,text/csv,application/json,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document">
-    <p class="muted">For this first version, each file must be under 2 MB.</p>
-    <p class="muted">PDFs need selectable text. Word import reads the main document text, including tables. Scans and pictures need text recognition first. If a selected file fails, the whole selection is skipped.</p>
+    <p id="importProgress" class="status" role="status"></p>
+    <p class="muted">Each file can be up to 2 MB. If one file fails, the whole selection is skipped.</p>
   </section>
 
   <section class="panel" id="backupTools">
@@ -646,9 +653,6 @@ $("categoryFilter").addEventListener("change", render);
 
 function validateImportedText(fileName, content, extension) {
   if (typeof content !== "string" || !content.trim()) {
-    if (extension === "pdf") {
-      throw new Error(fileName + " has no readable selectable text. It may be a scan or image-only PDF. Use text recognition in another app, or choose a text-based PDF.");
-    }
     throw new Error(fileName + " is empty or contains no readable text.");
   }
   return content;
@@ -717,14 +721,122 @@ function textPreview(text) {
   return text.length > limit ? text.slice(0, limit) + "\n\n[Preview ends here]" : text;
 }
 
-$("files").addEventListener("change", async event => {
-  const files = Array.from(event.target.files || []);
-  if (!files.length) return;
+const OCR_CDN = "https://cdn.jsdelivr.net/npm/tesseract.js@6.0.1/dist/";
+const OCR_PAGE_LIMIT = 10;
 
+async function withOcrDeadline(promise, message) {
+  let timer;
+  try {
+    return await Promise.race([promise, new Promise((_, reject) => {
+      timer = setTimeout(() => reject(new Error(message)), 90_000);
+    })]);
+  } finally { clearTimeout(timer); }
+}
+
+async function startEnglishOcr() {
+  if (!globalThis.Tesseract) {
+    const script = document.createElement("script");
+    script.src = OCR_CDN + "tesseract.min.js";
+    script.integrity = "sha384-r1ru3tcf6FhnCFR4B7pIFG+BhFF9LlFtz/P1y4pblWn3AGs9y3lBx5SKLNf4+rED";
+    script.crossOrigin = "anonymous";
+    const loaded = new Promise((resolve, reject) => {
+      script.onload = resolve;
+      script.onerror = reject;
+      document.head.appendChild(script);
+    });
+    try { await withOcrDeadline(loaded, "The reader took too long to load."); }
+    catch { throw new Error("Could not load text recognition. Check your connection and try again."); }
+    finally { script.remove(); }
+  }
+
+  let workerError;
+  const failure = new Promise((_, reject) => { workerError = reject; });
+  const startup = globalThis.Tesseract.createWorker("eng", 1, {
+    workerPath: OCR_CDN + "worker.min.js",
+    corePath: "https://cdn.jsdelivr.net/npm/tesseract.js-core@6.0.0",
+    errorHandler: workerError
+  });
+  try {
+    return await withOcrDeadline(Promise.race([startup, failure]), "Text recognition took too long to start.");
+  } catch {
+    startup.then(worker => worker.terminate()).catch(() => {});
+    throw new Error("Could not start text recognition. Check your connection and try again.");
+  }
+}
+
+async function readPdfImport(file, recognizeScans, report) {
+  if (typeof pdfjsLib === "undefined") {
+    throw new Error("The PDF reader could not load. Check your internet connection and reload the app.");
+  }
+  const data = new Uint8Array(await file.arrayBuffer());
+  const task = pdfjsLib.getDocument({ data, isEvalSupported: false, maxImageSize: 20_000_000 });
+  const pages = [];
+  const scanned = [];
+  let worker;
+  try {
+    const pdf = await task.promise;
+    for (let number = 1; number <= pdf.numPages; number++) {
+      const page = await pdf.getPage(number);
+      const extracted = await page.getTextContent();
+      const text = extracted.items.map(item => item.str || "").join(" ").trim();
+      pages.push(text);
+      page.cleanup();
+      if (!text && recognizeScans) {
+        scanned.push(number);
+        if (scanned.length > OCR_PAGE_LIMIT) {
+          throw new Error(file.name + " has more than 10 scanned pages. Split it into smaller PDFs and try again.");
+        }
+      }
+    }
+    if (scanned.length) {
+      report("Starting English text recognition…");
+      worker = await startEnglishOcr();
+    }
+    for (const number of scanned) {
+      report("Recognizing page " + number + " of " + pdf.numPages + " in " + file.name + "…");
+      const page = await pdf.getPage(number);
+      const canvas = await renderPdfCanvas(page, 2200, 4);
+      try {
+        const result = await withOcrDeadline(worker.recognize(canvas), "Text recognition took too long on page " + number + ".");
+        pages[number - 1] = result.data.text.trim();
+      } finally {
+        canvas.width = canvas.height = 0;
+        page.cleanup();
+      }
+    }
+  } finally {
+    await Promise.allSettled([task.destroy(), worker?.terminate()]);
+  }
+
+  const content = pages.join("\n\n");
+  if (!content.trim()) {
+    const help = recognizeScans ? " No English text could be recognized." : " Turn on Recognize text in scanned PDFs and select it again.";
+    throw new Error(file.name + " has no readable text." + help);
+  }
+  return { content, recognized: scanned.length > 0 };
+}
+
+$("files").addEventListener("change", async event => {
+  const picker = event.target;
+  const files = Array.from(picker.files || []);
+  if (picker.disabled || !files.length) return;
+
+  const scanOption = $("recognizeScans");
+  const categoryInput = $("importCategory");
+  const progress = $("importProgress");
+  const category = categoryInput.value;
+  const signedInUser = cloudUserId;
+  const recognizeScans = scanOption.checked;
+  const report = (message, error = false) => {
+    progress.textContent = message;
+    progress.dataset.error = String(error);
+  };
+  picker.disabled = scanOption.disabled = categoryInput.disabled = true;
   const additions = [];
 
   try {
     for (const file of files) {
+      report("Reading " + file.name + "…");
       if (file.size > 2 * 1024 * 1024) {
         throw new Error(file.name + " is larger than 2 MB.");
       }
@@ -735,21 +847,9 @@ $("files").addEventListener("change", async event => {
       }
 
       let content;
+      let recognized = false;
       if (ext === "pdf") {
-        if (typeof pdfjsLib === "undefined") {
-          throw new Error("The PDF reader could not load. Check your internet connection and reload the app before importing a PDF.");
-        }
-        const pdfData = new Uint8Array(await file.arrayBuffer());
-        const pdf = await pdfjsLib.getDocument({ data: pdfData, isEvalSupported: false }).promise;
-        const pages = [];
-
-        for (let pageNum = 1; pageNum <= pdf.numPages; pageNum++) {
-          const page = await pdf.getPage(pageNum);
-          const textContent = await page.getTextContent();
-          pages.push(textContent.items.map(item => item.str || "").join(" "));
-        }
-
-        content = pages.join("\n\n");
+        ({ content, recognized } = await readPdfImport(file, recognizeScans, report));
       } else if (ext === "docx") {
         content = await readWordText(file);
       } else {
@@ -760,30 +860,36 @@ $("files").addEventListener("change", async event => {
       additions.push({
         id: makeId(),
         title: file.name,
-        category: $("importCategory").value,
-        tags: "imported, " + ext,
+        category,
+        tags: "imported, " + ext + (recognized ? ", ocr" : ""),
         notes: ext === "pdf" ? "Imported PDF document" : ext === "docx" ? "Imported Word document" : "Imported text document",
         content,
         created: new Date().toISOString()
       });
     }
 
+    if (cloudUserId !== signedInUser || appScreen.hidden) throw new Error("Your sign-in changed during import. Please try again.");
     const previous = records;
     records = records.concat(additions);
 
     if (!save()) {
       records = previous;
+      report("Could not save this selection. Check this browser's available storage.", true);
       return;
     }
 
     render();
-    setStatus("Imported " + additions.length + " file(s) successfully.");
+    const message = "Imported " + additions.length + " file(s) successfully.";
+    report(message);
+    setStatus(message);
   } catch (error) {
     const message = error.message + " No files from this selection were imported.";
+    report(message, true);
     setStatus(message, false);
     alert(message);
   } finally {
-    event.target.value = "";
+    picker.value = "";
+    picker.disabled = scanOption.disabled = categoryInput.disabled = false;
   }
 });
 
@@ -1539,6 +1645,19 @@ function supportsImagePreview(type) {
   return ["image/jpeg", "image/png", "image/webp"].includes(type);
 }
 
+async function renderPdfCanvas(page, maxEdge, maxScale) {
+  const size = page.getViewport({ scale: 1 });
+  const longestEdge = Math.max(size.width, size.height);
+  if (!Number.isFinite(longestEdge) || longestEdge <= 0) throw new Error("Invalid PDF page size.");
+  const viewport = page.getViewport({ scale: Math.min(maxScale, maxEdge / longestEdge) });
+  const canvas = document.createElement("canvas");
+  canvas.width = Math.max(1, Math.ceil(viewport.width));
+  canvas.height = Math.max(1, Math.ceil(viewport.height));
+  await page.render({ canvasContext: canvas.getContext("2d"), viewport,
+    annotationMode: pdfjsLib.AnnotationMode.DISABLE }).promise;
+  return canvas;
+}
+
 async function createVisualPreview(blob, type, name, signal) {
   const figure = document.createElement("figure");
   figure.className = "original-visual";
@@ -1574,17 +1693,9 @@ async function createVisualPreview(blob, type, name, signal) {
   try {
     const pdf = await task.promise;
     const page = await pdf.getPage(1);
-    const size = page.getViewport({ scale: 1 });
-    const longestEdge = Math.max(size.width, size.height);
-    if (!Number.isFinite(longestEdge) || longestEdge <= 0) throw new Error("Invalid PDF page size.");
-    const viewport = page.getViewport({ scale: Math.min(2, 1600 / longestEdge) });
-    const canvas = document.createElement("canvas");
-    canvas.width = Math.max(1, Math.ceil(viewport.width));
-    canvas.height = Math.max(1, Math.ceil(viewport.height));
+    const canvas = await renderPdfCanvas(page, 1600, 2);
     canvas.setAttribute("role", "img");
     canvas.setAttribute("aria-label", "First page of " + name);
-    await page.render({ canvasContext: canvas.getContext("2d"), viewport,
-      annotationMode: pdfjsLib.AnnotationMode.DISABLE }).promise;
     caption.textContent = "Page 1 of " + pdf.numPages + " · Download the original to see the full PDF.";
     figure.append(caption, canvas);
     return figure;
